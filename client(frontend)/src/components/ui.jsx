@@ -1,0 +1,12 @@
+import {ArrowRight} from 'lucide-react';
+export const TONE={normal:'ok',ok:'ok',warning:'warn',warn:'warn',critical:'crit',crit:'crit',offline:'off',Operational:'ok',Attention:'warn',Critical:'crit',info:'info'};
+export const COL={sky:'#7cc4f5',lav:'#b49cf5',mint:'#6fd9b0',peach:'#f6a982',butter:'#f1cf62',rose:'#f08aa5'};
+export const PIE=[COL.sky,COL.lav,COL.mint,COL.peach,COL.rose];
+export const tip={contentStyle:{borderRadius:12,border:'1px solid #e6e0f5',fontSize:12}};
+export const Badge=({s,children})=><span className={`badge ${TONE[s]||'info'}`}>{children??s}</span>;
+export const Card=({title,right,children,className=''})=><section className={`card ${className}`}>{(title||right)&&<header><h3>{title}</h3>{right}</header>}{children}</section>;
+export const Stat=({icon:I,label,value,sub,tone='sky'})=><div className={`stat t-${tone}`}><div className="ico"><I size={20}/></div><div><div className="lbl">{label}</div><div className="val">{value}</div>{sub&&<div className="sub">{sub}</div>}</div></div>;
+export const Bar=({pct,tone='ok'})=><div className="bar"><i className={`f-${tone}`} style={{width:`${Math.max(2,Math.min(100,pct))}%`}}/></div>;
+export const Loading=()=><div className="loading">❄️ Loading station data…</div>;
+export const Title=({children,sub})=><div className="ptitle"><h1>{children}</h1>{sub&&<p>{sub}</p>}</div>;
+export const Chain=({items})=><div className="chain">{items.map((c,i)=><span key={c.k} style={{display:'contents'}}><div className="pill"><small>{c.k}</small><b>{c.v}</b></div>{i<items.length-1&&<ArrowRight size={16} color="#8b6fe0"/>}</span>)}</div>;

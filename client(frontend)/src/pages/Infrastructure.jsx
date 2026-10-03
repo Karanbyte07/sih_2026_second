@@ -1,0 +1,8 @@
+import {useState} from 'react';import {useNavigate} from 'react-router-dom';import {useApp} from '../context.jsx';import {useLive} from '../api.js';import {Card,Badge,Loading,Title,Stat} from '../components/ui.jsx';import {CheckCircle2,AlertTriangle,XCircle,Boxes} from 'lucide-react';
+export default function Infrastructure(){const {station}=useApp();const nav=useNavigate();const [f,setF]=useState('all');const [d]=useLive(`/api/stations/${station}/assets`);
+  if(!d)return <Loading/>;const A=d.assets,cnt=s=>A.filter(a=>a.status===s).length,rows=A.filter(a=>f==='all'||a.status===f);
+  return <><Title sub="Buildings, generators, batteries, heating, water and more">Infrastructure</Title>
+    <div className="g g4"><Stat icon={Boxes} tone="sky" label="Total assets" value={A.length}/><Stat icon={CheckCircle2} tone="mint" label="Normal" value={cnt('normal')}/><Stat icon={AlertTriangle} tone="butter" label="Warning" value={cnt('warning')}/><Stat icon={XCircle} tone="rose" label="Critical / offline" value={cnt('critical')+cnt('offline')}/></div>
+    <Card title="Asset inventory" className="mt" right={<div className="row">{['all','normal','warning','critical','offline'].map(s=><button key={s} className={`chip ${f===s?'on':''}`} onClick={()=>setF(s)}>{s}</button>)}</div>}>
+      <table><thead><tr><th>ID</th><th>Asset</th><th>Type</th><th>Key reading</th><th>Hours</th><th>Status</th></tr></thead><tbody>
+        {rows.map(a=><tr key={a.id} className="click" onClick={()=>nav(`/twin?asset=${a.id}`)}><td>{a.id.toUpperCase()}</td><td><b>{a.name}</b></td><td>{a.type}</td><td>{a.readings[0].k}: {a.readings[0].v} {a.readings[0].u}</td><td>{a.hours.toLocaleString()}</td><td><Badge s={a.status}/></td></tr>)}</tbody></table></Card></>}

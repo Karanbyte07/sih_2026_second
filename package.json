@@ -1,0 +1,1 @@
+{"name":"antarctic-twin","private":true,"scripts":{"setup":"npm i --prefix server && npm i --prefix client","dev":"concurrently -n api,web \"npm run dev --prefix server\" \"npm run dev --prefix client\""},"devDependencies":{"concurrently":"^9.0.0"}}
