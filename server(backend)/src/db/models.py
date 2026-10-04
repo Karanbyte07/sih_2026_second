@@ -207,6 +207,44 @@ class EnvironmentReading(Base):
     station = relationship("Station")
 
 
+class PublicEnvironmentObservation(Base):
+    """Normalized public observation; nullable fields remain null when the source omits them."""
+    __tablename__ = "environment_observations"
+    __table_args__ = (
+        UniqueConstraint("station_id", "source_name", "source_timestamp", name="uq_public_environment_observation"),
+        Index("ix_environment_observations_station_time", "station_id", "timestamp"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    station_id = Column(String(50), ForeignKey("stations.id"), nullable=False)
+    timestamp = Column(DateTime, nullable=False)
+    temperature = Column(Float, nullable=True)
+    wind_speed = Column(Float, nullable=True)
+    wind_direction = Column(Float, nullable=True)
+    pressure = Column(Float, nullable=True)
+    humidity = Column(Float, nullable=True)
+    visibility = Column(Float, nullable=True)
+    snow = Column(Float, nullable=True)
+    source_type = Column(String(50), nullable=False, default="PUBLIC")
+    source_name = Column(String(255), nullable=False)
+    source_timestamp = Column(DateTime, nullable=False)
+    ingested_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    raw_data = Column(JSON, nullable=True)
+
+    station = relationship("Station")
+
+
+class EnvironmentProviderStatus(Base):
+    __tablename__ = "environment_provider_status"
+
+    provider = Column(String(100), primary_key=True)
+    status = Column(String(30), nullable=False, default="UNAVAILABLE")
+    last_successful_fetch = Column(DateTime, nullable=True)
+    last_source_timestamp = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ---------------------------------------------------------------------------
 # Inventory & InventoryTransaction
 # ---------------------------------------------------------------------------

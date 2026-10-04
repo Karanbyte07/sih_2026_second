@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.db.database import get_db
-from src.db.models import Alert, Asset, InventoryItem, MaintenanceTask, ResupplySchedule, Station, User
+from src.db.models import Alert, Asset, EnvironmentProviderStatus, InventoryItem, MaintenanceTask, ResupplySchedule, Station, User
 from src.middleware.auth import get_current_user, require_role
 from src.services.audit_service import log_action
 from src.services.operational_service import (
@@ -27,6 +27,9 @@ from src.services.prediction_service import PredictionService
 from src.services.scenario_service import SCENARIO_LIMITS, ScenarioService
 from src.services.simulation_control_service import reset_controls, set_controls
 from src.services.energy_service import calculate_energy
+from src.services.environment_ingestion_service import PublicDataIngestionService
+from src.services.public_environment_provider import PublicEnvironmentProvider
+from src.config.settings import get_settings
 import src.utils.simulation as sim
 
 router = APIRouter(prefix="/api/stations", tags=["stations"])
@@ -254,7 +257,9 @@ async def get_environment(station_id: str, user: User = Depends(get_current_user
         imp.append("Falling pressure → storm may be approaching.")
 
     return {"now": e, "history": environment_history(db, station_id), "implications": imp,
-            "sourceType": "SIMULATED"}
+            "sourceType": e.get("sourceType", "SIMULATED"), "sourceName": e.get("sourceName"),
+            "sourceTimestamp": e.get("sourceTimestamp"), "dataAge": e.get("dataAge"),
+            "providerStatus": e.get("providerStatus", "UNAVAILABLE")}
 
 
 # ---------------------------------------------------------------------------
@@ -387,3 +392,30 @@ async def complete_maintenance(task_id: int, user: User = Depends(get_current_us
     db.commit()
     log_action(db, f"Completed maintenance task {task_id}", user=user, entity_type="maintenance", entity_id=str(task_id))
     return {"ok": True}
+
+
+@api_router.get("/environment/provider-status")
+async def environment_provider_status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    status = db.query(EnvironmentProviderStatus).filter_by(provider="NCPOR").first()
+    if not status:
+        return {"provider": "NCPOR", "status": "UNAVAILABLE", "lastSuccessfulFetch": None,
+                "lastSourceTimestamp": None, "lastError": None}
+    return {"provider": status.provider, "status": status.status,
+            "lastSuccessfulFetch": status.last_successful_fetch.isoformat() if status.last_successful_fetch else None,
+            "lastSourceTimestamp": status.last_source_timestamp.isoformat() if status.last_source_timestamp else None,
+            "lastError": status.last_error}
+
+
+@api_router.post("/environment/ingest")
+async def ingest_public_environment(user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
+    settings = get_settings()
+    if not settings.PUBLIC_ENVIRONMENT_ENABLED or not settings.PUBLIC_ENVIRONMENT_URL:
+        raise HTTPException(status_code=503, detail="Official NCPOR public environment source is not configured")
+    provider = PublicEnvironmentProvider(settings.PUBLIC_ENVIRONMENT_URL, settings.PUBLIC_ENVIRONMENT_TIMEOUT_SECONDS)
+    ingestion = PublicDataIngestionService(db)
+    try:
+        observations = await __import__("asyncio").to_thread(provider.fetch)
+        return {"inserted": ingestion.ingest(observations), "sourceType": "PUBLIC", "provider": provider.name}
+    except Exception as error:
+        ingestion.record_failure(error)
+        raise HTTPException(status_code=502, detail="Public NCPOR environment ingestion failed") from error

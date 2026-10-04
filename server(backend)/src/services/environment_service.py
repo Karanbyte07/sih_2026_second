@@ -1,5 +1,17 @@
-"""Simulation-only Antarctic environment provider."""
+"""Environment provider abstractions and simulation weather utilities."""
 from random import random
+
+from src.services.environment_provider import EnvironmentProvider, NormalizedEnvironmentObservation
+
+
+class SimulationEnvironmentProvider:
+    name = "Simulation"
+
+    def __init__(self, station_state: dict):
+        self.station_state = station_state
+
+    def current(self) -> dict:
+        return self.station_state["env"]
 
 
 def update_environment(station: dict) -> dict:

@@ -13,6 +13,7 @@ from src.db.models import (
     InventoryTransaction,
     MaintenanceTask,
     ResupplySchedule,
+    PublicEnvironmentObservation,
 )
 import src.utils.simulation as sim
 
@@ -87,9 +88,18 @@ def environment_history(db: Session, station_id: str, hours: int = 72) -> list[d
     rows = db.query(EnvironmentReading).filter(
         EnvironmentReading.station_id == station_id, EnvironmentReading.timestamp >= since
     ).order_by(EnvironmentReading.timestamp.asc()).all()
-    return [{"t": row.timestamp.strftime("%H:%M:%S"), "temp": row.temperature,
-             "wind": row.wind_speed, "pressure": row.pressure, "snow": row.snow}
-            for row in rows]
+    public_rows = db.query(PublicEnvironmentObservation).filter(
+        PublicEnvironmentObservation.station_id == station_id,
+        PublicEnvironmentObservation.timestamp >= since,
+    ).order_by(PublicEnvironmentObservation.timestamp.asc()).all()
+    history = [{"t": row.timestamp.strftime("%H:%M:%S"), "temp": row.temperature,
+                "wind": row.wind_speed, "pressure": row.pressure, "snow": row.snow,
+                "sourceType": "SIMULATED", "sourceName": "Simulation"} for row in rows]
+    history.extend({"t": row.timestamp.strftime("%H:%M:%S"), "temp": row.temperature,
+                    "wind": row.wind_speed, "pressure": row.pressure, "snow": row.snow,
+                    "humidity": row.humidity, "sourceType": "PUBLIC", "sourceName": row.source_name}
+                   for row in public_rows)
+    return sorted(history, key=lambda item: item["t"])
 
 
 def inventory_output(db: Session, station: dict) -> list[dict]:

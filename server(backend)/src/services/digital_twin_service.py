@@ -2,9 +2,11 @@
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from src.db.models import Alert, Asset, AssetReading, EnergySnapshot, EnvironmentReading, InventoryItem
+from src.db.models import (Alert, Asset, AssetReading, EnergySnapshot, EnvironmentReading,
+                           EnvironmentProviderStatus, InventoryItem, PublicEnvironmentObservation)
 from src.services.environment_service import severity
 from src.services.operational_service import alert_output
+from src.services.simulation_control_service import get_controls
 
 
 class DigitalTwinService:
@@ -16,12 +18,35 @@ class DigitalTwinService:
         return self.db.query(Station).filter(Station.id == station_id).first()
 
     def latest_environment(self, station_id: str):
-        row = self.db.query(EnvironmentReading).filter(EnvironmentReading.station_id == station_id).order_by(EnvironmentReading.timestamp.desc()).first()
+        public = self.db.query(PublicEnvironmentObservation).filter(
+            PublicEnvironmentObservation.station_id == station_id
+        ).order_by(PublicEnvironmentObservation.timestamp.desc()).first()
+        row = public or self.db.query(EnvironmentReading).filter(
+            EnvironmentReading.station_id == station_id
+        ).order_by(EnvironmentReading.timestamp.desc()).first()
         if not row:
             return None
-        return {"temp": row.temperature, "wind": row.wind_speed, "dir": row.wind_direction,
-                "pressure": row.pressure, "snow": row.snow, "vis": row.visibility,
-                "timestamp": row.timestamp.isoformat(), "sourceType": row.source_type}
+        is_public = isinstance(row, PublicEnvironmentObservation)
+        result = {"temp": row.temperature, "wind": row.wind_speed, "dir": row.wind_direction,
+                  "pressure": row.pressure, "snow": row.snow, "vis": row.visibility,
+                  "humidity": getattr(row, "humidity", None), "timestamp": row.timestamp.isoformat(),
+                  "sourceType": "PUBLIC" if is_public else "SIMULATED",
+                  "sourceName": row.source_name if is_public else "Simulation",
+                  "sourceTimestamp": (row.source_timestamp if is_public else row.timestamp).isoformat()}
+        status = self.db.query(EnvironmentProviderStatus).filter_by(provider="NCPOR").first()
+        result["providerStatus"] = status.status if status else "UNAVAILABLE"
+        result["dataAge"] = max(0, int((datetime.utcnow() - row.timestamp).total_seconds()))
+        controls = get_controls(station_id)
+        if controls and result["sourceType"] == "PUBLIC":
+            baseline = result.copy()
+            if "temperatureOffset" in controls:
+                result["temp"] = (result["temp"] or 0) + controls["temperatureOffset"]
+            if "windSpeed" in controls:
+                result["wind"] = controls["windSpeed"]
+            result["sourceType"] = "SIMULATED"
+            result["sourceName"] = "Simulation overlay"
+            result["baseline"] = baseline
+        return result
 
     def latest_energy(self, station_id: str):
         row = self.db.query(EnergySnapshot).filter(EnergySnapshot.station_id == station_id).order_by(EnergySnapshot.timestamp.desc()).first()

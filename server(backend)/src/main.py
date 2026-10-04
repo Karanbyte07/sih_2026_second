@@ -16,9 +16,12 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy import inspect, text
 from src.db.database import engine, Base, SessionLocal
+from src.config.settings import get_settings
 from src.db.models import Station, Asset, SystemSettings
 from src.routes import auth_routes, station_routes
 from src.services.operational_service import ensure_operational_seed, load_inventory, persist_station_snapshot, sync_alerts
+from src.services.environment_ingestion_service import PublicDataIngestionService
+from src.services.public_environment_provider import PublicEnvironmentProvider
 import src.utils.simulation as sim
 
 
@@ -79,11 +82,31 @@ async def lifespan(app: FastAPI):
                 for minutes_ago in range(24 * 60, -1, -10):
                     persist_station_snapshot(db, station, datetime.utcnow() - timedelta(minutes=minutes_ago))
 
-    # Start the 3-second tick loop in the background
+    settings = get_settings()
+    public_task = None
+    if settings.PUBLIC_ENVIRONMENT_ENABLED and settings.PUBLIC_ENVIRONMENT_URL:
+        public_task = asyncio.create_task(public_environment_loop(settings))
+
+    # Start the simulator loop in the background
     task = asyncio.create_task(persist_tick_loop())
     yield
     # Shutdown
     task.cancel()
+    if public_task:
+        public_task.cancel()
+
+
+async def public_environment_loop(settings):
+    provider = PublicEnvironmentProvider(settings.PUBLIC_ENVIRONMENT_URL, settings.PUBLIC_ENVIRONMENT_TIMEOUT_SECONDS)
+    while True:
+        with SessionLocal() as db:
+            ingestion = PublicDataIngestionService(db)
+            try:
+                observations = await asyncio.to_thread(provider.fetch)
+                ingestion.ingest(observations)
+            except Exception as error:
+                ingestion.record_failure(error)
+        await asyncio.sleep(settings.PUBLIC_ENVIRONMENT_REFRESH_SECONDS)
 
 
 async def persist_tick_loop():
@@ -108,7 +131,7 @@ async def persist_tick_loop():
 app = FastAPI(
     title="Antarctic Twin Backend",
     version="1.0.0",
-    description="Phase 3: Persistent Digital Twin state and telemetry simulation",
+    description="Phase 5: Public environment provider and Digital Twin integration",
     lifespan=lifespan,
 )
 
