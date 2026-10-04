@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api", tags=["auth"])
 
 @router.get("/health")
 async def health():
-    return {"ok": True, "simulated": True, "phase": 5}
+    return {"ok": True, "simulated": True, "phase": 8}
 
 
 class LoginRequest(BaseModel):
