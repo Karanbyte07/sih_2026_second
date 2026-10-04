@@ -18,7 +18,7 @@ from sqlalchemy import inspect, text
 from src.db.database import engine, Base, SessionLocal, ensure_infrastructure_schema, ensure_logistics_schema
 from src.config.settings import get_settings
 from src.db.models import Station, Asset, SystemSettings
-from src.routes import auth_routes, station_routes
+from src.routes import auth_routes, station_routes, ml_routes
 from src.services.operational_service import ensure_operational_seed, load_inventory, persist_station_snapshot, sync_alerts
 from src.services.environment_ingestion_service import PublicDataIngestionService
 from src.services.public_environment_provider import PublicEnvironmentProvider
@@ -162,6 +162,7 @@ app.add_middleware(
 app.include_router(auth_routes.router)
 app.include_router(station_routes.router)
 app.include_router(station_routes.api_router)
+app.include_router(ml_routes.router)
 
 # Health endpoint (root)
 @app.get("/")

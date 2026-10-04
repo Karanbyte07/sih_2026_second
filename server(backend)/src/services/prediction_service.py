@@ -21,28 +21,17 @@ class PredictionService:
         state = self._calculation_state(station_id)
         if not state:
             return None
-            
-        import urllib.request
-        import json
-        ml_forecast = None
-        ml_inventory = None
-        ml_station_health = None
-        
-        try:
-            # Try to fetch from the AI/ML microservice running on port 8001
-            req_forecast = urllib.request.Request(f"http://localhost:8001/ml/energy-forecast?station_id={station_id}")
-            with urllib.request.urlopen(req_forecast, timeout=1) as response:
-                ml_forecast = json.loads(response.read().decode())
-                
-            req_inv = urllib.request.Request(f"http://localhost:8001/ml/inventory-forecast?station_id={station_id}")
-            with urllib.request.urlopen(req_inv, timeout=1) as response:
-                ml_inventory = json.loads(response.read().decode())
-                
-            req_health = urllib.request.Request(f"http://localhost:8001/ml/station-health/{station_id}")
-            with urllib.request.urlopen(req_health, timeout=1) as response:
-                ml_station_health = json.loads(response.read().decode())
-        except Exception as e:
-            pass # Fallback to rule-based if ML service is not running
+
+        from src.services import aiml_client
+        temp = state["env"]["temp"]
+        load = state["baseLoad"] if "baseLoad" in state else 50
+        fuel_item = next((i for i in state["inv"] if i["k"] == "fuel"), None)
+        fuel_stock = fuel_item["stock"] if fuel_item else 10000
+
+        ml_forecast = aiml_client.ml_energy_forecast(station_id, temperature=temp, load_kw=load)
+        ml_inventory = aiml_client.ml_inventory_forecast(station_id, current_stock=fuel_stock,
+                                                         temperature=temp, load_kw=load)
+        ml_station_health = aiml_client.ml_station_health(station_id)
             
         current = calculate_energy(state)
         environment = state["env"]["temp"]

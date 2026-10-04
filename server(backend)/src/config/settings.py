@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     PUBLIC_ENVIRONMENT_URL: str = ""
     PUBLIC_ENVIRONMENT_REFRESH_SECONDS: int = 900
     PUBLIC_ENVIRONMENT_TIMEOUT_SECONDS: int = 10
+    AIML_SERVICE_URL: str = "http://localhost:8001"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
