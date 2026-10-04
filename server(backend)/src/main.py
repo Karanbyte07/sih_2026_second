@@ -67,13 +67,13 @@ async def lifespan(app: FastAPI):
         # Load persisted asset states (hours, last service, next service)
         assets = db.query(Asset).all()
         asset_overrides = {}
+        inventory_overrides = load_inventory(db)
         for a in assets:
             asset_overrides[(a.station_id, a.asset_key)] = {
                 "hours": a.operational_hours,
                 "last": a.last_service_date,
                 "next": a.next_service_date,
             }
-            inventory_overrides = load_inventory(db)
 
     # Initialize the simulation with DB overrides
     sim.init_simulation(settings_dict, asset_overrides)

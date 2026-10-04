@@ -79,7 +79,21 @@ const snap=s=>{const m=calc(s),d=daysOf(s,s.inv[0]);return{capacity:r1(m.cap),de
 
 const st=(q,r,n)=>{q.s=S[q.params.id];q.s?n():r.status(404).json({error:'Unknown station'})};
 const who=q=>q.get('x-user');
+const mlGet=async path=>{const response=await fetch(`http://localhost:8001${path}`);if(!response.ok)throw new Error(`AI/ML returned ${response.status}`);return response.json()};
+const mlPost=async(path,body)=>{const response=await fetch(`http://localhost:8001${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!response.ok)throw new Error(`AI/ML returned ${response.status}`);return response.json()};
 app.get('/api/health',(q,r)=>r.json({ok:true,simulated:true}));
+app.get('/api/ml/health',async(q,r)=>{try{r.json(await mlGet('/health'))}catch(error){r.status(503).json({status:'UNAVAILABLE',models_loaded:{},error:error.message})}});
+app.get('/api/ml/stations/:id/forecast',async(q,r)=>{const s=S[q.params.id];if(!s)return r.status(404).json({error:'Unknown station'});const m=calc(s),e=s.env,fuel=s.inv[0];
+ try{const [energy,inventory,health,recommendations]=await Promise.all([
+   mlGet(`/ml/energy-forecast?station_id=${s.id}&temperature=${e.temp}&load_kw=${m.demand}`),
+   mlGet(`/ml/inventory-forecast?station_id=${s.id}&current_stock=${fuel.stock}&temperature=${e.temp}&load_kw=${m.demand}`),
+   mlGet(`/ml/station-health/${s.id}`),mlGet(`/ml/recommendations/${s.id}`)]);
+  r.json({stationId:s.id,energy,inventory,health,recommendations:recommendations.recommendations||[],ts:new Date().toISOString()})
+ }catch(error){r.status(503).json({error:'AI/ML service unavailable',detail:error.message})}});
+app.get('/api/ml/stations/:id/anomalies',async(q,r)=>{const s=S[q.params.id];if(!s)return r.status(404).json({error:'Unknown station'});
+ try{const anomalies=await Promise.all(s.assets.filter(a=>a.readings.length).map(async a=>{const value=k=>a.readings.find(x=>x.k.toLowerCase()===k)?.v||0;const ml=await mlPost('/ml/anomaly',{assetId:a.id,temperature:value('temperature'),vibration:value('vibration'),load_kw:a.cap,power_consumption_kw:a.cap*1.1,pressure:s.env.pressure,operating_hours:a.hours});return{assetId:a.id,name:a.name,type:a.type,status:a.status,ml}}));r.json({stationId:s.id,anomalies,ts:new Date().toISOString()})
+ }catch(error){r.status(503).json({error:'AI/ML service unavailable',detail:error.message})}});
+app.post('/api/ml/stations/:id/simulate',async(q,r)=>{if(!S[q.params.id])return r.status(404).json({error:'Unknown station'});try{r.json(await mlPost('/ml/simulate',{stationId:q.params.id,scenario:q.body.scenario,value:q.body.value}))}catch(error){r.status(503).json({error:'AI/ML service unavailable',detail:error.message})}});
 app.post('/api/login',(q,r)=>{const u=USERS.find(x=>x.email===q.body.email);if(!u||q.body.password!=='antarctic')return r.status(401).json({error:'Invalid credentials (demo password: antarctic)'});log(u.name,'Logged in');r.json({user:u})});
 app.get('/api/stations',(q,r)=>r.json({ts:Date.now(),age:Date.now()-lastTick,simulated:true,stations:Object.values(S).map(s=>({id:s.id,name:s.name,status:status(s)}))}));
 app.get('/api/stations/:id/overview',st,(q,r)=>{const s=q.s,m=calc(s),f=s.inv[0],al=alerts(s);
