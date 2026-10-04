@@ -4,7 +4,7 @@ export async function api(path, opt = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (sess?.token) headers['Authorization'] = `Bearer ${sess.token}`;
   const r = await fetch(path, { ...opt, headers, body: opt.body ? JSON.stringify(opt.body) : undefined });
-  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || j.detail || r.statusText); return j
 }
 // Polls an endpoint. Returns [data, reload, hadError]
 export function useLive(path, ms = 4000) {

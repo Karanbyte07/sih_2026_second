@@ -21,6 +21,29 @@ def seed_database():
 
     with SessionLocal() as db:
         if db.query(User).first():
+            # Keep demo accounts available when an existing database predates
+            # the complete frontend account list.
+            stations = {station.id: station for station in db.query(Station).all()}
+            demo_users = [
+                ("maint@ncpor.in", "Maintenance User", "maintenance", "bharati"),
+                ("logistics@ncpor.in", "Logistics User", "logistics", "maitri"),
+            ]
+            for email, name, role, station_id in demo_users:
+                user = db.query(User).filter(User.email == email).first()
+                if not user:
+                    user = User(
+                        email=email,
+                        name=name,
+                        role=role,
+                        password_hash=hash_password("antarctic"),
+                    )
+                    db.add(user)
+                    db.flush()
+                if station_id in stations and not any(
+                    access.station_id == station_id for access in user.station_access
+                ):
+                    db.add(UserStationAccess(user_id=user.id, station_id=station_id))
+            db.commit()
             ensure_operational_seed(db)
             print("Database already seeded. Operational records verified.")
             return
@@ -39,7 +62,19 @@ def seed_database():
             role="ops",
             password_hash=hash_password("antarctic"),
         )
-        db.add_all([admin, ops])
+        maint = User(
+            email="maint@ncpor.in",
+            name="Maintenance User",
+            role="maintenance",
+            password_hash=hash_password("antarctic"),
+        )
+        logistics = User(
+            email="logistics@ncpor.in",
+            name="Logistics User",
+            role="logistics",
+            password_hash=hash_password("antarctic"),
+        )
+        db.add_all([admin, ops, maint, logistics])
         db.commit()
 
         print("Seeding Stations...")
@@ -52,7 +87,9 @@ def seed_database():
         usa1 = UserStationAccess(user_id=admin.id, station_id=maitri.id)
         usa2 = UserStationAccess(user_id=admin.id, station_id=bharati.id)
         usa3 = UserStationAccess(user_id=ops.id, station_id=maitri.id)
-        db.add_all([usa1, usa2, usa3])
+        usa4 = UserStationAccess(user_id=maint.id, station_id=bharati.id)
+        usa5 = UserStationAccess(user_id=logistics.id, station_id=maitri.id)
+        db.add_all([usa1, usa2, usa3, usa4, usa5])
         db.commit()
 
         print("Seeding Assets...")
