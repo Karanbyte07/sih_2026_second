@@ -39,11 +39,11 @@ async def station_anomalies(station_id: str,
     for asset in twin["assets"]:
         if not asset["readings"]:
             continue
-        reading = asset["readings"][0]
+        readings = {reading["k"]: reading["v"] for reading in asset["readings"]}
         ml = aiml_client.ml_anomaly(
             asset_id=asset["id"],
-            temperature=reading.get("v", 0) if reading["k"] == "temperature" else 0,
-            vibration=reading.get("v", 0) if reading["k"] == "vibration" else 2.0,
+            temperature=readings.get("temperature", 0.0),
+            vibration=readings.get("vibration", 2.0),
             load_kw=asset.get("cap", 50),
             power_kw=asset.get("cap", 50) * 1.1,
             pressure=980,

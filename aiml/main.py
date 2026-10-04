@@ -1,27 +1,31 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import random
+from pathlib import Path
 
 import pandas as pd
 import joblib
-import os
 
 app = FastAPI(title="Antarctic Twin AI/ML Service")
 
-# Load models on startup if they exist
-model_path = 'models/isolation_forest.joblib'
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "models"
+DATASET_PATH = BASE_DIR / "data" / "telemetry_dataset.csv"
+
+# Load model artifacts relative to this file so the service works from any cwd.
+model_path = MODEL_DIR / "isolation_forest.joblib"
 isolation_forest = None
-if os.path.exists(model_path):
+if model_path.exists():
     isolation_forest = joblib.load(model_path)
 
-energy_model_path = 'models/energy_model.joblib'
+energy_model_path = MODEL_DIR / "energy_model.joblib"
 energy_model = None
-if os.path.exists(energy_model_path):
+if energy_model_path.exists():
     energy_model = joblib.load(energy_model_path)
 
-fuel_model_path = 'models/fuel_model.joblib'
+fuel_model_path = MODEL_DIR / "fuel_model.joblib"
 fuel_model = None
-if os.path.exists(fuel_model_path):
+if fuel_model_path.exists():
     fuel_model = joblib.load(fuel_model_path)
 
 @app.get("/health")
@@ -32,7 +36,10 @@ def health_check():
             "isolation_forest": isolation_forest is not None,
             "energy_model": energy_model is not None,
             "fuel_model": fuel_model is not None
-        }
+        },
+        "model_artifacts": sorted(path.name for path in MODEL_DIR.glob("*.joblib")),
+        "training_dataset_present": DATASET_PATH.exists(),
+        "data_mode": "MODEL_ARTIFACTS_WITH_SIMULATED_BACKEND_TELEMETRY",
     }
 
 @app.post("/ml/anomaly")

@@ -2,11 +2,20 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
 import joblib
-import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = BASE_DIR / "data" / "telemetry_dataset.csv"
+MODEL_DIR = BASE_DIR / "models"
 
 def train_anomaly_model():
     print("Loading synthetic telemetry dataset...")
-    df = pd.read_csv('data/telemetry_dataset.csv')
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(
+            f"Training dataset not found at {DATASET_PATH}. "
+            "Run telemetry_simulator.py first or provide a validated telemetry export."
+        )
+    df = pd.read_csv(DATASET_PATH)
     
     # Use normal operating data to train (or let isolation forest figure it out)
     # We will use temperature, vibration, load, power consumption, pressure, operating hours as features
@@ -27,9 +36,10 @@ def train_anomaly_model():
     anomalies_detected = (df['anomaly_pred'] == -1).sum()
     print(f"Model trained. Detected {anomalies_detected} anomalies out of {len(df)} records.")
     
-    os.makedirs('models', exist_ok=True)
-    joblib.dump(model, 'models/isolation_forest.joblib')
-    print("Model saved to models/isolation_forest.joblib")
+    MODEL_DIR.mkdir(exist_ok=True)
+    output_path = MODEL_DIR / "isolation_forest.joblib"
+    joblib.dump(model, output_path)
+    print(f"Model saved to {output_path}")
 
 if __name__ == "__main__":
     train_anomaly_model()

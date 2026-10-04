@@ -19,7 +19,7 @@ export default function AIAnalytics(){const {station}=useApp();
           <Brain size={22}/>
           <div><h2 style={{margin:0}}>{mlUp?'🟢 AI/ML Engine Online':'🔴 AI/ML Engine Offline'}</h2>
             <small className="mu">{mlUp
-              ?`Models: Anomaly ${mlHealth.models_loaded?.isolation_forest?'✅':'❌'} · Energy ${mlHealth.models_loaded?.energy_model?'✅':'❌'} · Fuel ${mlHealth.models_loaded?.fuel_model?'✅':'❌'}`
+              ?`Models: Anomaly ${mlHealth.models_loaded?.isolation_forest?'✅':'❌'} · Energy ${mlHealth.models_loaded?.energy_model?'✅':'❌'} · Fuel ${mlHealth.models_loaded?.fuel_model?'✅':'❌'} · ${mlHealth.data_mode?.replaceAll('_',' ')}`
               :'Backend is using rule-based fallback logic. Start the AI/ML service on port 8001.'}</small>
           </div>
         </div>

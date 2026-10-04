@@ -2,7 +2,9 @@ import pandas as pd
 import numpy as np
 import datetime
 import random
-import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
 
 def generate_telemetry(station_id, start_date, num_days=30, interval_minutes=15):
     records = []
@@ -82,6 +84,8 @@ if __name__ == "__main__":
     
     df_all = pd.concat([df_maitri, df_bharati], ignore_index=True)
     
-    os.makedirs('data', exist_ok=True)
-    df_all.to_csv('data/telemetry_dataset.csv', index=False)
-    print(f"Dataset generated with {len(df_all)} records. Saved to data/telemetry_dataset.csv.")
+    data_dir = BASE_DIR / "data"
+    data_dir.mkdir(exist_ok=True)
+    output_path = data_dir / "telemetry_dataset.csv"
+    df_all.to_csv(output_path, index=False)
+    print(f"Dataset generated with {len(df_all)} records. Saved to {output_path}.")

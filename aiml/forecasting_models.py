@@ -2,11 +2,20 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import GradientBoostingRegressor
 import joblib
-import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = BASE_DIR / "data" / "telemetry_dataset.csv"
+MODEL_DIR = BASE_DIR / "models"
 
 def train_forecasting_models():
     print("Loading telemetry dataset...")
-    df = pd.read_csv('data/telemetry_dataset.csv')
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(
+            f"Training dataset not found at {DATASET_PATH}. "
+            "Run telemetry_simulator.py first or provide a validated telemetry export."
+        )
+    df = pd.read_csv(DATASET_PATH)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values(by=['station_id', 'timestamp'])
     
@@ -40,9 +49,9 @@ def train_forecasting_models():
     fuel_model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=5, random_state=42)
     fuel_model.fit(train_df[features], y_fuel)
     
-    os.makedirs('models', exist_ok=True)
-    joblib.dump(energy_model, 'models/energy_model.joblib')
-    joblib.dump(fuel_model, 'models/fuel_model.joblib')
+    MODEL_DIR.mkdir(exist_ok=True)
+    joblib.dump(energy_model, MODEL_DIR / "energy_model.joblib")
+    joblib.dump(fuel_model, MODEL_DIR / "fuel_model.joblib")
     
     print("Models trained and saved successfully.")
 
