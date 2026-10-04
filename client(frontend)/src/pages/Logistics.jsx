@@ -1,11 +1,13 @@
-import {useState} from 'react';import {useApp} from '../context.jsx';import {useLive,api} from '../api.js';import {Card,Badge,Bar,Loading,Title} from '../components/ui.jsx';
-export default function Logistics(){const {station,can}=useApp();const [d,reload]=useLive(`/api/stations/${station}/logistics`);const [delay,setDelay]=useState(0);const [edit,setEdit]=useState({});
-  if(!d)return <Loading/>;const inDays=d.resupply.inDays+delay;const calc=i=>i.daysLeft-inDays;const bad=d.items.filter(i=>calc(i)<0);
+import {useState} from 'react';import {Brain} from 'lucide-react';
+import {useApp} from '../context.jsx';import {useLive,api} from '../api.js';import {Card,Badge,Bar,Loading,Title} from '../components/ui.jsx';
+export default function Logistics(){const {station,can}=useApp();const [d,reload]=useLive(`/api/stations/${station}/logistics`);const [pr]=useLive(`/api/stations/${station}/predictions`);const [delay,setDelay]=useState(0);const [edit,setEdit]=useState({});
+  if(!d||!pr)return <Loading/>;const inDays=d.resupply.inDays+delay;const calc=i=>i.daysLeft-inDays;const bad=d.items.filter(i=>calc(i)<0);
   const save=async k=>{await api(`/api/stations/${station}/inventory`,{method:'POST',body:{k,stock:edit[k]}});setEdit(e=>({...e,[k]:undefined}));reload()};
+  const fuelMl=pr.resources.find(r=>r.k==='fuel')?.method==='ML_MODEL';
   return <><Title sub="Will the station have enough supplies until the next resupply?">Logistics &amp; Inventory</Title>
     <Card className={bad.length?'bannerbad':'bannerok'}><h2 style={{margin:0}}>{bad.length?`⚠ ${bad.map(i=>i.name).join(', ')} will run out before resupply`:'✅ All supplies are projected to last until resupply'}</h2><p className="mu">Next resupply in {inDays} days ({d.resupply.date})</p></Card>
     <Card title="Resupply delay simulator" className="mt"><div className="row"><input type="range" min="0" max="30" value={delay} onChange={e=>setDelay(+e.target.value)}/><b>+{delay} days delay</b><span className="mu">(what-if only — nothing is changed)</span></div></Card>
-    <Card title="Inventory" className="mt"><table><thead><tr><th>Resource</th><th>Stock</th><th style={{width:160}}>Level</th><th>Use / day</th><th>Days left</th><th>Min</th><th>Status</th>{can('inventory')&&<th>Update</th>}</tr></thead><tbody>
+    <Card title="Inventory" className="mt" right={fuelMl&&<Badge s="info"><Brain size={12}/> Fuel projections powered by ML</Badge>}><table><thead><tr><th>Resource</th><th>Stock</th><th style={{width:160}}>Level</th><th>Use / day</th><th>Days left</th><th>Min</th><th>Status</th>{can('inventory')&&<th>Update</th>}</tr></thead><tbody>
       {d.items.map(i=>{const g=calc(i),t=g<0?'crit':g<7?'warn':'ok';return <tr key={i.k}><td><b>{i.name}</b></td><td>{i.stock.toLocaleString()} {i.unit}</td><td><Bar pct={i.pct} tone={t}/></td><td>{i.rate}</td><td><b>{i.daysLeft}</b></td><td>{i.min}%{i.belowMin&&' ⚠'}</td><td><Badge s={t}>{g<0?'short by '+(-g).toFixed(1)+' d':g<7?'tight':'OK'}</Badge></td>
         {can('inventory')&&<td><div className="row"><input style={{width:90}} type="number" placeholder={i.stock} value={edit[i.k]??''} onChange={e=>setEdit({...edit,[i.k]:e.target.value})}/><button className="btn ghost" disabled={edit[i.k]==null||edit[i.k]===''} onClick={()=>save(i.k)}>Save</button></div></td>}</tr>})}</tbody></table>
       {!can('inventory')&&<p className="mu" style={{fontSize:12}}>Only logistics officers and admins can edit inventory.</p>}</Card>
