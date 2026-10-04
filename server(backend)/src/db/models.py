@@ -180,6 +180,8 @@ class EnergySnapshot(Base):
     demand_kw = Column(Float, nullable=False)
     capacity_kw = Column(Float, nullable=False)
     battery_pct = Column(Float, nullable=False)
+    fuel_consumption_l = Column(Float, nullable=True)
+    generator_load_pct = Column(Float, nullable=True)
     source_type = Column(String(50), nullable=False, default="SIMULATED")
 
     station = relationship("Station")
@@ -284,6 +286,7 @@ class Alert(Base):
     acked = Column(Boolean, nullable=False, default=False)
     acked_by = Column(String(255), nullable=True)
     acked_at = Column(DateTime, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
     status = Column(String(50), nullable=False, default="ACTIVE") # ACTIVE, RESOLVED
 
     station = relationship("Station")

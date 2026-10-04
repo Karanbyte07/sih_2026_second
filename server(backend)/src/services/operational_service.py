@@ -30,6 +30,8 @@ def persist_station_snapshot(db: Session, station: dict, observed_at: datetime |
         station_id=station["id"], timestamp=observed_at,
         generation_kw=sim.r1(metrics["output"]), demand_kw=sim.r1(metrics["demand"]),
         capacity_kw=sim.r1(metrics["cap"]), battery_pct=sim.r1(battery["pct"]),
+        fuel_consumption_l=sim.r1(metrics["fuelRate"] / 24),
+        generator_load_pct=sim.r1(metrics["genOut"] / metrics["capGen"] * 100) if metrics["capGen"] else 0,
         source_type="SIMULATED",
     ))
     env = station["env"]
@@ -142,7 +144,13 @@ def record_inventory_change(db: Session, item: InventoryItem, new_stock: float, 
 
 def sync_alerts(db: Session, station: dict) -> None:
     """Upsert currently triggered rules by stable station alert key."""
-    for current in sim.make_alerts(station):
+    current_alerts = sim.make_alerts(station)
+    current_keys = {current["id"] for current in current_alerts}
+    for stale in db.query(Alert).filter(Alert.station_id == station["id"], Alert.status == "ACTIVE").all():
+        if stale.alert_key not in current_keys:
+            stale.status = "RESOLVED"
+            stale.resolved_at = _now()
+    for current in current_alerts:
         key = current["id"]
         alert = db.query(Alert).filter(Alert.station_id == station["id"], Alert.alert_key == key,
                                        Alert.status == "ACTIVE").first()

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from sqlalchemy import inspect, text
 from src.db.database import engine, Base, SessionLocal
 from src.db.models import Station, Asset, SystemSettings
 from src.routes import auth_routes, station_routes
@@ -23,6 +24,15 @@ import src.utils.simulation as sim
 async def lifespan(app: FastAPI):
     # Ensure tables exist (Phase 1 simplistic migration)
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        columns = {column["name"] for column in inspect(engine).get_columns("energy_snapshots")}
+        if "fuel_consumption_l" not in columns:
+            connection.execute(text("ALTER TABLE energy_snapshots ADD COLUMN fuel_consumption_l FLOAT"))
+        if "generator_load_pct" not in columns:
+            connection.execute(text("ALTER TABLE energy_snapshots ADD COLUMN generator_load_pct FLOAT"))
+        alert_columns = {column["name"] for column in inspect(engine).get_columns("alerts")}
+        if "resolved_at" not in alert_columns:
+            connection.execute(text("ALTER TABLE alerts ADD COLUMN resolved_at DATETIME"))
 
     # Load persistent settings and asset states from SQLite to seed the in-memory simulation
     with SessionLocal() as db:
@@ -89,7 +99,7 @@ async def persist_tick_loop():
 app = FastAPI(
     title="Antarctic Twin Backend",
     version="1.0.0",
-    description="Phase 2: Persistent operational data and telemetry foundation",
+    description="Phase 3: Persistent Digital Twin state and telemetry simulation",
     lifespan=lifespan,
 )
 

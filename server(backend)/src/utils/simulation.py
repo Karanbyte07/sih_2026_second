@@ -27,6 +27,10 @@ import random
 from datetime import datetime, timedelta
 from typing import Any
 
+from src.services.energy_service import calculate_energy, update_battery
+from src.services.environment_service import update_environment
+from src.services.inventory_service import consume
+
 
 # ---------------------------------------------------------------------------
 # Module-level mutable state (shared across all routes)
@@ -68,24 +72,7 @@ def day(n: float) -> str:
 # Energy balance
 # ---------------------------------------------------------------------------
 def calc(s: dict) -> dict:
-    heat = max(0.0, -5.0 - s["env"]["temp"]) * 0.9 + 10.0
-    demand = s["baseLoad"] + heat
-    cap_gen = (
-        sum(a["cap"] for a in s["assets"] if a["type"] == "generator" and a["online"])
-        * s["capFactor"]
-    )
-    cap = cap_gen + s["solar"] * s["capFactor"]
-    output = min(demand, cap)
-    gen_out = max(0.0, output - s["solar"] * s["capFactor"])
-    return {
-        "heat": heat,
-        "demand": demand,
-        "cap": cap,
-        "capGen": cap_gen,
-        "output": output,
-        "genOut": gen_out,
-        "deficit": max(0.0, demand - cap),
-    }
+    return calculate_energy(s)
 
 
 # ---------------------------------------------------------------------------
@@ -174,36 +161,15 @@ def tick(s: dict) -> None:  # noqa: C901
     cfg = _settings
     e = s["env"]
 
-    # Environmental drift
-    e["temp"] = cl(e["temp"] + (s["t"] - e["temp"]) * 0.03 + R(-0.5, 0.5), -48, 2)
-    e["wind"] = cl(e["wind"] + (s["w"] - e["wind"]) * 0.05 + R(-1.2, 1.2), 0, 40)
-    e["dir"] = (e["dir"] + R(-6, 6) + 360) % 360
-    e["pressure"] = cl(
-        e["pressure"] + (s["p"] - e["pressure"]) * 0.02 + R(-0.8, 0.8), 930, 1010
-    )
-    e["snow"] = cl(e["snow"] + R(-0.3, 0.5), 0, 60)
-    e["vis"] = cl(
-        e["vis"]
-        + (9 - e["vis"]) * 0.05
-        + R(-0.6, 0.6)
-        - (0.3 if e["wind"] > 20 else 0),
-        0.3,
-        10,
-    )
+    # Environment is a gradual simulated provider, not independent random samples.
+    e = update_environment(s)
 
     m = calc(s)
     b = s["battery"]
 
-    # Battery charge/discharge
-    if m["deficit"] > 0:
-        b["pct"] -= m["deficit"] / 6 / b["kwh"] * 100
-    else:
-        b["pct"] += min(20, m["cap"] - m["demand"]) * 0.5 / 6 / b["kwh"] * 100
-    b["pct"] = cl(b["pct"], 0, 100)
-
-    # Inventory consumption (1/144 of daily rate per 10-min tick)
-    for item in s["inv"]:
-        item["stock"] = max(0.0, item["stock"] - rate_of(s, item) / 144)
+    # One tick represents roughly 30 seconds of operational time.
+    update_battery(s, m, interval_hours=1 / 120)
+    consume(s, m, interval_hours=1 / 120)
 
     fuel = s["inv"][0]
     fd = days_of(s, fuel)
@@ -225,6 +191,8 @@ def tick(s: dict) -> None:  # noqa: C901
                 a["vib"] = min(9.0, a["vib"] + R(0.03, 0.1))
             else:
                 a["vib"] = 2.2 + R(-0.2, 0.3)
+            if a["online"]:
+                a["hours"] += 1 / 120
             t = 62.0 + load * 0.3 + R(-1, 1) if a["online"] else -5.0
             rd = [
                 ("Vibration", a["vib"], "mm/s"),
@@ -266,7 +234,9 @@ def tick(s: dict) -> None:  # noqa: C901
         elif a["type"] == "water":
             w = s["inv"][4]
             p = w["stock"] / w["cap"] * 100
-            rd = [("Level", p, "%"), ("Flow", R(8, 12), "L/min")]
+            pump_online = a["online"]
+            s["waterStatus"] = "normal" if pump_online else "degraded"
+            rd = [("Level", p, "%"), ("Flow", R(8, 12) if pump_online else 0, "L/min")]
             st = "warning" if p < w["min"] else "normal"
 
         elif a["type"] == "living":
@@ -483,11 +453,11 @@ _ASSET_DEFS = [
 
 _STATION_PARAMS = {
     "maitri": {
-        "t": -14, "w": 9,  "p": 985, "sn": 8,  "base": 36,
+        "t": -14, "w": 9,  "p": 985, "sn": 8,  "base": 36, "occupancy": 24,
         "solar": 6, "bat": 84, "res": 24, "fuel": 14000, "spare": 90, "cold": False,
     },
     "bharati": {
-        "t": -18, "w": 12, "p": 975, "sn": 14, "base": 42,
+        "t": -18, "w": 12, "p": 975, "sn": 14, "base": 42, "occupancy": 31,
         "solar": 4, "bat": 63, "res": 20, "fuel": 9000,  "spare": 38, "cold": True,
     },
 }
@@ -529,6 +499,7 @@ def _build_station(sid: str, params: dict) -> dict:
         },
         "assets": _make_assets(),
         "baseLoad": params["base"],
+        "occupancy": params["occupancy"], "occupancyCapacity": 50,
         "solar": params["solar"],
         "capFactor": 1.0,
         "battery": {"kwh": 400, "pct": params["bat"]},

@@ -22,6 +22,7 @@ from src.services.operational_service import (
     alert_output, energy_history, environment_history, inventory_output,
     latest_energy, record_inventory_change, sync_alerts,
 )
+from src.services.digital_twin_service import DigitalTwinService
 import src.utils.simulation as sim
 
 router = APIRouter(prefix="/api/stations", tags=["stations"])
@@ -40,14 +41,22 @@ def _get_station(station_id: str) -> dict:
 # GET /api/stations
 # ---------------------------------------------------------------------------
 @router.get("")
-async def list_stations(user: User = Depends(get_current_user)):
+async def list_stations(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     age_ms = int((datetime.now() - sim.last_tick).total_seconds() * 1000)
+    twin = DigitalTwinService(db)
+    def station_status(twin_state):
+        if any(alert["severity"] == "critical" for alert in twin_state["alerts"]):
+            return "Critical"
+        if twin_state["freshness"]["status"] == "STALE" or any(alert["severity"] == "warning" for alert in twin_state["alerts"]):
+            return "Attention"
+        return "Operational"
+
     return {
         "ts": int(datetime.now().timestamp() * 1000),
         "age": age_ms,
         "simulated": True,
         "stations": [
-            {"id": s["id"], "name": s["name"], "status": sim.station_status(s)}
+            {"id": s["id"], "name": s["name"], "status": station_status(twin.state(s["id"]))}
             for s in sim.S.values()
         ],
     }
@@ -57,34 +66,42 @@ async def list_stations(user: User = Depends(get_current_user)):
 # GET /api/stations/:id/overview
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/overview")
-async def get_overview(station_id: str, user: User = Depends(get_current_user)):
+async def get_overview(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = _get_station(station_id)
+    twin = DigitalTwinService(db).state(station_id)
+    if not twin:
+        raise HTTPException(status_code=404, detail="Unknown station")
     m = sim.calc(s)
-    f = s["inv"][0]
-    al = sim.make_alerts(s)
+    f = next((i for i in twin["inventory"] if i.item_key == "fuel"), None)
+    al = twin["alerts"]
+    env = twin["environment"] or sim.env_now(s)
+    energy = twin["energy"] or {}
+    assets = twin["assets"]
+    status = "CRITICAL" if any(a["severity"] == "critical" for a in al) else "ATTENTION" if al else "OPERATIONAL"
 
     return {
         "id": s["id"],
         "name": s["name"],
-        "status": sim.station_status(s),
+        "status": status,
         "kpis": {
-            "gen": sim.r1(m["output"]),
-            "demand": sim.r1(m["demand"]),
-            "cap": sim.r1(m["cap"]),
-            "fuelPct": round(f["stock"] / f["cap"] * 100),
-            "fuelDays": sim.r1(sim.days_of(s, f)),
-            "battery": sim.r1(s["battery"]["pct"]),
-            "normal": sum(1 for a in s["assets"] if a["status"] == "normal"),
-            "total": len(s["assets"]),
+            "gen": energy.get("gen", sim.r1(m["output"])),
+            "demand": energy.get("demand", sim.r1(m["demand"])),
+            "cap": energy.get("cap", sim.r1(m["cap"])),
+            "fuelPct": round(f.stock / f.capacity * 100) if f else 0,
+            "fuelDays": sim.r1(f.stock / max(0.1, m["fuelRate"])) if f else 0,
+            "battery": energy.get("battery", sim.r1(s["battery"]["pct"])),
+            "normal": sum(1 for a in assets if a["status"] == "normal"),
+            "total": len(assets),
         },
-        "env": sim.env_now(s),
+        "env": env,
         "alerts": [a for a in al if not a["acked"]][:4],
         "alertCount": {
             "critical": sum(1 for a in al if a["severity"] == "critical" and not a["acked"]),
             "warning": sum(1 for a in al if a["severity"] == "warning" and not a["acked"]),
         },
-        "assets": s["assets"],
+        "assets": assets,
         "chain": sim.chain_info(s),
+        "freshness": twin["freshness"],
     }
 
 
@@ -92,9 +109,11 @@ async def get_overview(station_id: str, user: User = Depends(get_current_user)):
 # GET /api/stations/:id/assets
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/assets")
-async def get_assets(station_id: str, user: User = Depends(get_current_user)):
+async def get_assets(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = _get_station(station_id)
-    return {"assets": s["assets"], "env": sim.env_now(s)}
+    twin = DigitalTwinService(db).state(station_id)
+    env = twin["environment"] if twin and twin["environment"] else sim.env_now(s)
+    return {"assets": twin["assets"] if twin else s["assets"], "env": env}
 
 
 # ---------------------------------------------------------------------------
@@ -103,18 +122,19 @@ async def get_assets(station_id: str, user: User = Depends(get_current_user)):
 @router.get("/{station_id}/energy")
 async def get_energy(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = _get_station(station_id)
+    twin = DigitalTwinService(db).state(station_id)
     m = sim.calc(s)
     base = s["baseLoad"]
     return {
         "history": energy_history(db, station_id),
         "now": {
-            "gen": sim.r1(m["output"]),
-            "demand": sim.r1(m["demand"]),
-            "cap": sim.r1(m["cap"]),
+            "gen": (twin["energy"] or {}).get("gen", sim.r1(m["output"])),
+            "demand": (twin["energy"] or {}).get("demand", sim.r1(m["demand"])),
+            "cap": (twin["energy"] or {}).get("cap", sim.r1(m["cap"])),
             "deficit": sim.r1(m["deficit"]),
-            "battery": sim.r1(s["battery"]["pct"]),
+            "battery": (twin["energy"] or {}).get("battery", sim.r1(s["battery"]["pct"])),
             "kwh": s["battery"]["kwh"],
-            "fuel": sim.inv_out(s)[0],
+            "fuel": inventory_output(db, s)[0],
         },
         "breakdown": [
             {"name": "Heating",      "value": sim.r1(m["heat"])},
@@ -196,7 +216,10 @@ async def update_inventory(
 @router.get("/{station_id}/environment")
 async def get_environment(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     s = _get_station(station_id)
+    twin = DigitalTwinService(db).state(station_id)
     e = s["env"]
+    if twin and twin["environment"]:
+        e = twin["environment"]
     m = sim.calc(s)
     imp: list[str] = []
 
@@ -217,7 +240,7 @@ async def get_environment(station_id: str, user: User = Depends(get_current_user
     if e["pressure"] < 965:
         imp.append("Falling pressure → storm may be approaching.")
 
-    return {"now": sim.env_now(s), "history": environment_history(db, station_id), "implications": imp,
+    return {"now": e, "history": environment_history(db, station_id), "implications": imp,
             "sourceType": "SIMULATED"}
 
 

@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS energy_snapshots (
     demand_kw FLOAT NOT NULL,
     capacity_kw FLOAT NOT NULL,
     battery_pct FLOAT NOT NULL,
+    fuel_consumption_l FLOAT,
+    generator_load_pct FLOAT,
     source_type VARCHAR(50) NOT NULL DEFAULT 'SIMULATED'
 );
 CREATE INDEX IF NOT EXISTS ix_energy_snapshots_station_time ON energy_snapshots(station_id, timestamp);
@@ -82,6 +84,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     acked BOOLEAN NOT NULL DEFAULT 0,
     acked_by VARCHAR(255),
     acked_at DATETIME,
+    resolved_at DATETIME,
     status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
     UNIQUE(station_id, alert_key, status)
 );
