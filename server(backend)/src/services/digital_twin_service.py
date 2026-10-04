@@ -48,21 +48,30 @@ class DigitalTwinService:
                            "cap": asset.capacity_kw, "online": asset.online, "hours": asset.operational_hours,
                            "last": asset.last_service_date, "next": asset.next_service_date,
                            "readings": [{"k": r.metric, "v": r.value, "u": r.unit} for r in latest_readings],
-                           "hist": trend, "status": self._asset_status(asset, readings)})
+                           "hist": trend, **self._asset_health(asset, readings)})
         return output
 
     @staticmethod
-    def _asset_status(asset, readings) -> str:
+    def _asset_health(asset, readings) -> dict:
         if not asset.online:
-            return "offline"
+            return {"status": "offline", "healthScore": 0, "healthDrivers": ["asset is offline"]}
         values = {r.metric.lower(): r.value for r in readings}
         vibration = values.get("vibration", 0)
         temperature = values.get("temperature", 0)
+        drivers = []
         if vibration >= 6 or temperature > 105:
-            return "critical"
+            if vibration >= 6:
+                drivers.append("vibration above critical threshold")
+            if temperature > 105:
+                drivers.append("temperature above critical threshold")
+            return {"status": "critical", "healthScore": 35, "healthDrivers": drivers}
         if vibration >= 4.5 or temperature > 95:
-            return "warning"
-        return "normal"
+            if vibration >= 4.5:
+                drivers.append("vibration above baseline")
+            if temperature > 95:
+                drivers.append("elevated operating temperature")
+            return {"status": "warning", "healthScore": 68, "healthDrivers": drivers}
+        return {"status": "normal", "healthScore": 100, "healthDrivers": ["readings within configured range"]}
 
     def state(self, station_id: str) -> dict:
         station = self._station(station_id)
@@ -80,3 +89,21 @@ class DigitalTwinService:
                 "inventory": inventory, "alerts": [alert_output(a) for a in alerts],
                 "freshness": {"status": freshness, "age": int(age)},
                 "environmentSeverity": severity(environment) if environment else "unknown"}
+
+    def calculation_state(self, station_id: str) -> dict:
+        """Build domain-service inputs from the latest persistent observations."""
+        twin = self.state(station_id)
+        if not twin:
+            return None
+        env = twin["environment"] or {"temp": -15, "wind": 10}
+        energy = twin["energy"] or {"battery": 50}
+        return {
+            "id": station_id, "env": {"temp": env["temp"], "wind": env["wind"]},
+            "baseLoad": 36 if station_id == "maitri" else 42,
+            "resupplyIn": 24 if station_id == "maitri" else 20,
+            "solar": 6 if station_id == "maitri" else 4, "capFactor": 1,
+            "occupancy": 24 if station_id == "maitri" else 31, "occupancyCapacity": 50,
+            "assets": [{"id": a["id"], "type": a["type"], "online": a["online"], "cap": a["cap"]} for a in twin["assets"]],
+            "battery": {"kwh": 400, "pct": energy.get("battery", 50)},
+            "inv": [{"k": i.item_key, "stock": i.stock, "cap": i.capacity, "rate": i.daily_rate} for i in twin["inventory"]],
+        }

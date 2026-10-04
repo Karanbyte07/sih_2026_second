@@ -15,14 +15,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.db.database import get_db
-from src.db.models import Alert, Asset, InventoryItem, MaintenanceTask, ResupplySchedule, User
-from src.middleware.auth import get_current_user
+from src.db.models import Alert, Asset, InventoryItem, MaintenanceTask, ResupplySchedule, Station, User
+from src.middleware.auth import get_current_user, require_role
 from src.services.audit_service import log_action
 from src.services.operational_service import (
     alert_output, energy_history, environment_history, inventory_output,
     latest_energy, record_inventory_change, sync_alerts,
 )
 from src.services.digital_twin_service import DigitalTwinService
+from src.services.prediction_service import PredictionService
+from src.services.scenario_service import SCENARIO_LIMITS, ScenarioService
+from src.services.simulation_control_service import reset_controls, set_controls
+from src.services.energy_service import calculate_energy
 import src.utils.simulation as sim
 
 router = APIRouter(prefix="/api/stations", tags=["stations"])
@@ -42,7 +46,7 @@ def _get_station(station_id: str) -> dict:
 # ---------------------------------------------------------------------------
 @router.get("")
 async def list_stations(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    age_ms = int((datetime.now() - sim.last_tick).total_seconds() * 1000)
+    age_ms = 0
     twin = DigitalTwinService(db)
     def station_status(twin_state):
         if any(alert["severity"] == "critical" for alert in twin_state["alerts"]):
@@ -56,8 +60,8 @@ async def list_stations(user: User = Depends(get_current_user), db: Session = De
         "age": age_ms,
         "simulated": True,
         "stations": [
-            {"id": s["id"], "name": s["name"], "status": station_status(twin.state(s["id"]))}
-            for s in sim.S.values()
+            {"id": station.id, "name": station.name, "status": station_status(twin.state(station.id))}
+            for station in db.query(Station).filter(Station.active == True).all()
         ],
     }
 
@@ -67,11 +71,12 @@ async def list_stations(user: User = Depends(get_current_user), db: Session = De
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/overview")
 async def get_overview(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
-    twin = DigitalTwinService(db).state(station_id)
+    twin_service = DigitalTwinService(db)
+    twin = twin_service.state(station_id)
     if not twin:
         raise HTTPException(status_code=404, detail="Unknown station")
-    m = sim.calc(s)
+    s = twin_service.calculation_state(station_id)
+    m = calculate_energy(s)
     f = next((i for i in twin["inventory"] if i.item_key == "fuel"), None)
     al = twin["alerts"]
     env = twin["environment"] or sim.env_now(s)
@@ -80,8 +85,8 @@ async def get_overview(station_id: str, user: User = Depends(get_current_user), 
     status = "CRITICAL" if any(a["severity"] == "critical" for a in al) else "ATTENTION" if al else "OPERATIONAL"
 
     return {
-        "id": s["id"],
-        "name": s["name"],
+        "id": twin["id"],
+        "name": twin["name"],
         "status": status,
         "kpis": {
             "gen": energy.get("gen", sim.r1(m["output"])),
@@ -110,10 +115,10 @@ async def get_overview(station_id: str, user: User = Depends(get_current_user), 
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/assets")
 async def get_assets(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
     twin = DigitalTwinService(db).state(station_id)
-    env = twin["environment"] if twin and twin["environment"] else sim.env_now(s)
-    return {"assets": twin["assets"] if twin else s["assets"], "env": env}
+    if not twin:
+        raise HTTPException(status_code=404, detail="Unknown station")
+    return {"assets": twin["assets"], "env": twin["environment"]}
 
 
 # ---------------------------------------------------------------------------
@@ -121,9 +126,12 @@ async def get_assets(station_id: str, user: User = Depends(get_current_user), db
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/energy")
 async def get_energy(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
-    twin = DigitalTwinService(db).state(station_id)
-    m = sim.calc(s)
+    twin_service = DigitalTwinService(db)
+    twin = twin_service.state(station_id)
+    if not twin:
+        raise HTTPException(status_code=404, detail="Unknown station")
+    s = twin_service.calculation_state(station_id)
+    m = calculate_energy(s)
     base = s["baseLoad"]
     return {
         "history": energy_history(db, station_id),
@@ -152,7 +160,9 @@ async def get_energy(station_id: str, user: User = Depends(get_current_user), db
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/logistics")
 async def get_logistics(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
+    s = DigitalTwinService(db).calculation_state(station_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Unknown station")
     return {
         "items": inventory_output(db, s),
         "resupply": {
@@ -176,7 +186,9 @@ async def update_inventory(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    s = _get_station(station_id)
+    station = db.query(Station).filter(Station.id == station_id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Unknown station")
     k = body.get("k")
     stock_raw = body.get("stock")
 
@@ -197,17 +209,15 @@ async def update_inventory(
         raise HTTPException(status_code=400, detail=f"Bad input: unknown inventory key '{k}'")
 
     v = min(v, inv_item.capacity)
-    next(item for item in s["inv"] if item["k"] == k)["stock"] = v
-
     log_action(
         db,
-        f"Updated {inv_item.name} stock at {s['name']} to {v}",
+        f"Updated {inv_item.name} stock at {station.name} to {v}",
         user=user,
         entity_type="inventory",
         entity_id=f"{station_id}:{k}",
     )
     record_inventory_change(db, inv_item, v, body.get("reason", "ADJUSTMENT"), user.name)
-    return {"ok": True, "items": inventory_output(db, s)}
+    return {"ok": True, "items": inventory_output(db, DigitalTwinService(db).calculation_state(station_id))}
 
 
 # ---------------------------------------------------------------------------
@@ -215,12 +225,15 @@ async def update_inventory(
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/environment")
 async def get_environment(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
-    twin = DigitalTwinService(db).state(station_id)
-    e = s["env"]
+    twin_service = DigitalTwinService(db)
+    twin = twin_service.state(station_id)
+    if not twin:
+        raise HTTPException(status_code=404, detail="Unknown station")
+    s = twin_service.calculation_state(station_id)
+    e = twin["environment"]
     if twin and twin["environment"]:
         e = twin["environment"]
-    m = sim.calc(s)
+    m = calculate_energy(s)
     imp: list[str] = []
 
     if e["temp"] < -25:
@@ -249,8 +262,6 @@ async def get_environment(station_id: str, user: User = Depends(get_current_user
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/alerts")
 async def get_alerts(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
-    sync_alerts(db, s)
     alerts = db.query(Alert).filter(Alert.station_id == station_id, Alert.status == "ACTIVE").order_by(Alert.severity).all()
     return {"alerts": [alert_output(alert) for alert in alerts]}
 
@@ -260,7 +271,9 @@ async def get_alerts(station_id: str, user: User = Depends(get_current_user), db
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/maintenance")
 async def get_maintenance(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = _get_station(station_id)
+    twin = DigitalTwinService(db).state(station_id)
+    if not twin:
+        raise HTTPException(status_code=404, detail="Unknown station")
     return {
         "tasks": [{"id": t.id, "assetId": t.asset_id, "title": t.title, "status": "Done" if t.status == "Completed" else t.status,
                "due": t.due_date, "parts": t.parts, "by": t.created_by} for t in
@@ -275,7 +288,7 @@ async def get_maintenance(station_id: str, user: User = Depends(get_current_user
                 "last": a["last"],
                 "next": a["next"],
             }
-            for a in s["assets"]
+            for a in twin["assets"]
         ],
     }
 
@@ -284,88 +297,56 @@ async def get_maintenance(station_id: str, user: User = Depends(get_current_user
 # GET /api/stations/:id/predictions
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/predictions")
-async def get_predictions(station_id: str, user: User = Depends(get_current_user)):
-    s = _get_station(station_id)
-    e = s["env"]
-    m = sim.calc(s)
+async def get_predictions(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    result = PredictionService(db).forecast(station_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Unknown station")
+    return result
 
-    # 24-hour demand forecast (rule-based, same as original)
-    forecast = []
-    for h in range(24):
-        temp = e["temp"] + 2.5 * math.sin((h - 4) / 24 * 6.283) - (
-            6 * math.exp(-((h - 14) ** 2) / 30) if s["cold"] else 0
-        )
-        demand = sim.r1(
-            s["baseLoad"]
-            + max(0, -5 - temp) * 0.9
-            + 10
-            + (4 if 6 <= h <= 20 else 0)
-        )
-        forecast.append(
-            {"h": f"+{h}h", "temp": sim.r1(temp), "demand": demand, "capacity": sim.r1(m["cap"])}
-        )
 
-    # Anomaly detection (rule-based)
-    anomalies = []
-    for a in s["assets"]:
-        if a["status"] == "normal" or not a["online"]:
-            continue
-        r0 = a["readings"][0] if a["readings"] else None
-        if not r0:
-            continue
-        hist = a["hist"][-10:]
-        slope = (hist[-1] - hist[0]) / (len(hist) - 1) if len(hist) > 1 else 0.0
-        is_gen = a["type"] == "generator"
-        hrs = None
-        if is_gen and slope > 0.02:
-            hrs = sim.r1((sim._settings["vibCrit"] - a["vib"]) / slope * 10 / 60)
+@api_router.post("/stations/{station_id}/simulation/control")
+async def simulation_control(station_id: str, body: dict,
+                              user: User = Depends(require_role("admin", "ops")),
+                              db: Session = Depends(get_db)):
+    allowed = {"temperatureOffset", "windSpeed", "waterPlantAvailability", "occupancy", "operatingLoadFactor", "delayDays", "generatorFailures"}
+    controls = {key: value for key, value in body.items() if key in allowed}
+    try:
+        for key, value in controls.items():
+            if key == "generatorFailures":
+                if not isinstance(value, list) or not all(item in {"gen1", "gen2", "gen3"} for item in value):
+                    raise ValueError("generatorFailures must contain only gen1, gen2, or gen3")
+                continue
+            low, high = SCENARIO_LIMITS[key]
+            if not isinstance(value, (int, float)) or not low <= value <= high:
+                raise ValueError(f"{key} must be between {low} and {high}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"stationId": station_id, "temporary": True, "controls": set_controls(station_id, controls)}
 
-        anomalies.append(
-            {
-                "assetId": a["id"],
-                "name": a["name"],
-                "severity": a["status"],
-                "metric": r0["k"],
-                "value": f"{r0['v']} {r0['u']}",
-                "reason": (
-                    f"Vibration is {r0['v']} mm/s, "
-                    f"{(r0['v'] / 2.2):.1f}× the 2.2 mm/s baseline and rising "
-                    f"~{(slope * 6):.2f} mm/s per simulated hour."
-                    if is_gen
-                    else f"Rule-based: {r0['k']} {r0['v']} {r0['u']} is outside its normal range."
-                ),
-                "urgency": (
-                    f"≈ {hrs} simulated hours until critical threshold at current trend"
-                    if hrs and hrs > 0
-                    else "Past critical threshold – inspect now"
-                    if is_gen and a["vib"] > sim._settings["vibCrit"]
-                    else "Inspect at next maintenance window"
-                ),
-                "trend": a["hist"],
-            }
-        )
 
-    resources = [
-        {
-            "name": i["name"],
-            "daysLeft": i["daysLeft"],
-            "resupplyIn": s["resupplyIn"],
-            "risk": i["risk"],
-            "pct": i["pct"],
-        }
-        for i in sim.inv_out(s)
-    ]
+@api_router.post("/stations/{station_id}/simulation/reset")
+async def simulation_reset(station_id: str, user: User = Depends(require_role("admin", "ops"))):
+    return {"stationId": station_id, "temporary": True, "controls": reset_controls(station_id), "reset": True}
 
-    shortage_hours = sum(1 for x in forecast if x["demand"] > x["capacity"])
-    peak = max(x["demand"] for x in forecast) if forecast else 0
 
-    return {
-        "forecast": forecast,
-        "shortageHours": shortage_hours,
-        "peak": peak,
-        "anomalies": anomalies,
-        "resources": resources,
-    }
+@api_router.post("/simulations")
+async def run_simulation(body: dict, user: User = Depends(require_role("admin", "ops")), db: Session = Depends(get_db)):
+    station_id = body.get("stationId")
+    if not station_id:
+        raise HTTPException(status_code=400, detail="stationId is required")
+    scenario = body.get("scenario", "GENERATOR_FAILURE")
+    value = body.get("value")
+    inputs = {"assetId": body.get("assetId", "gen2")}
+    mapping = {"temp_drop": "temperatureOffset", "demand_increase": "operatingLoadFactor", "delayed_resupply": "delayDays"}
+    if scenario in mapping and value is not None:
+        inputs[mapping[scenario]] = -float(value) if scenario == "temp_drop" else (1 + float(value) / 100 if scenario == "demand_increase" else float(value))
+    try:
+        result = ScenarioService(db).run(station_id, scenario, inputs)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result:
+        raise HTTPException(status_code=404, detail="Unknown station")
+    return result
 
 
 @api_router.post("/alerts/{alert_id}/acknowledge")

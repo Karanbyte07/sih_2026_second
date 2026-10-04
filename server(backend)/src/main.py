@@ -5,6 +5,8 @@ Hooks up routes, configures CORS, handles DB initialisation
 and starts the async simulation tick loop.
 """
 import asyncio
+import os
+import time
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
@@ -86,14 +88,21 @@ async def lifespan(app: FastAPI):
 
 async def persist_tick_loop():
     """Advance the simulator and persist each observation batch."""
+    interval = float(os.getenv("SIMULATION_INTERVAL_SECONDS", "3"))
+    persistence_interval = float(os.getenv("PERSISTENCE_INTERVAL_SECONDS", "15"))
+    last_persisted = 0.0
     while True:
         for station in sim.S.values():
             sim.tick(station)
-            with SessionLocal() as db:
-                persist_station_snapshot(db, station)
-                sync_alerts(db, station)
         sim.last_tick = datetime.now()
-        await asyncio.sleep(3)
+        now = time.monotonic()
+        if now - last_persisted >= persistence_interval:
+            with SessionLocal() as db:
+                for station in sim.S.values():
+                    persist_station_snapshot(db, station)
+                    sync_alerts(db, station)
+            last_persisted = now
+        await asyncio.sleep(interval)
 
 
 app = FastAPI(
