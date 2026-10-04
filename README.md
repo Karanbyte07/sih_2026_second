@@ -12,4 +12,5 @@ Or run separately: `cd server && npm start` and `cd client && npm run dev`.
 1. Bharati → Overview → watch Generator 02 vibration climb (simulated drift) → alert appears.
 2. Alert → "Open in Digital Twin" → inspect readings → Simulate failure.
 3. Energy / Logistics show the chained cause→effect. Maintenance → mark Gen 02 task done to clear the fault.
+4. 
 Replace `server/index.js` data generation with real sensor feeds later; the frontend only talks to `/api/*`.
