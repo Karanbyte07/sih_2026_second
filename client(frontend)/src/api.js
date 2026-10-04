@@ -1,7 +1,9 @@
 import {useEffect,useState} from 'react';
 let sess=null;export const setSess=u=>{sess=u};
 export async function api(path,opt={}){
-  const r=await fetch(path,{...opt,headers:{'Content-Type':'application/json','x-user':sess?.name||'guest','x-role':sess?.role||''},body:opt.body?JSON.stringify(opt.body):undefined});
+  const headers = {'Content-Type':'application/json'};
+  if (sess?.token) headers['Authorization'] = `Bearer ${sess.token}`;
+  const r=await fetch(path,{...opt,headers,body:opt.body?JSON.stringify(opt.body):undefined});
   const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||r.statusText);return j}
 // Polls an endpoint. Returns [data, reload, hadError]
 export function useLive(path,ms=4000){
