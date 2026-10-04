@@ -35,6 +35,14 @@ async def lifespan(app: FastAPI):
             connection.execute(text("ALTER TABLE energy_snapshots ADD COLUMN fuel_consumption_l FLOAT"))
         if "generator_load_pct" not in columns:
             connection.execute(text("ALTER TABLE energy_snapshots ADD COLUMN generator_load_pct FLOAT"))
+        energy_columns = {
+            "base_load_kw": "FLOAT", "heating_load_kw": "FLOAT", "water_load_kw": "FLOAT",
+            "lab_load_kw": "FLOAT", "communications_load_kw": "FLOAT", "lighting_load_kw": "FLOAT",
+            "other_load_kw": "FLOAT", "energy_status": "VARCHAR(30)",
+        }
+        for column, column_type in energy_columns.items():
+            if column not in columns:
+                connection.execute(text(f"ALTER TABLE energy_snapshots ADD COLUMN {column} {column_type}"))
         alert_columns = {column["name"] for column in inspect(engine).get_columns("alerts")}
         if "resolved_at" not in alert_columns:
             connection.execute(text("ALTER TABLE alerts ADD COLUMN resolved_at DATETIME"))

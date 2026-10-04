@@ -1,16 +1,19 @@
 """Database-backed current Digital Twin state assembled from latest observations."""
 from datetime import datetime
 from sqlalchemy.orm import Session
+from src.db.database import ensure_energy_schema
 
 from src.db.models import (Alert, Asset, AssetReading, EnergySnapshot, EnvironmentReading,
                            EnvironmentProviderStatus, InventoryItem, PublicEnvironmentObservation)
 from src.services.environment_service import severity
 from src.services.operational_service import alert_output
 from src.services.simulation_control_service import get_controls
+from src.services.energy_service import station_energy_config
 
 
 class DigitalTwinService:
     def __init__(self, db: Session):
+        ensure_energy_schema()
         self.db = db
 
     def _station(self, station_id: str):
@@ -54,10 +57,12 @@ class DigitalTwinService:
             return None
         return {"gen": row.generation_kw, "demand": row.demand_kw, "cap": row.capacity_kw,
                 "battery": row.battery_pct, "timestamp": row.timestamp.isoformat(),
-                "sourceType": row.source_type}
+            "fuelConsumption": row.fuel_consumption_l, "generatorLoadPct": row.generator_load_pct,
+            "energyStatus": row.energy_status, "sourceType": row.source_type}
 
     def assets(self, station_id: str) -> list[dict]:
         assets = self.db.query(Asset).filter(Asset.station_id == station_id).all()
+        energy_config = station_energy_config(station_id)
         output = []
         for asset in assets:
             readings = self.db.query(AssetReading).filter(AssetReading.asset_id == asset.id).order_by(AssetReading.timestamp.desc()).limit(30).all()
@@ -68,12 +73,21 @@ class DigitalTwinService:
             latest_readings = [next(reading for reading in readings if reading.metric == metric) for metric in metric_names]
             trend_metric = latest_readings[0].metric if latest_readings else None
             trend = [reading.value for reading in reversed(readings) if reading.metric == trend_metric]
+            generator_metadata = {}
+            if asset.type == "generator":
+                generator_metadata = {
+                    "ratedCapacityKVA": energy_config["rated_capacity_kva"],
+                    "ratedCapacitySourceType": energy_config["rated_source_type"],
+                    "usableCapacityKW": energy_config["usable_capacity_kw"],
+                    "usableCapacitySourceType": energy_config["usable_source_type"],
+                    "powerFactorAssumption": energy_config["power_factor_assumption"],
+                }
             output.append({"id": asset.asset_key, "name": asset.name, "type": asset.type,
                            "x": asset.x, "y": asset.y, "w": asset.w, "h": asset.h, "links": asset.links,
                            "cap": asset.capacity_kw, "online": asset.online, "hours": asset.operational_hours,
                            "last": asset.last_service_date, "next": asset.next_service_date,
                            "readings": [{"k": r.metric, "v": r.value, "u": r.unit} for r in latest_readings],
-                           "hist": trend, **self._asset_health(asset, readings)})
+                           "hist": trend, **generator_metadata, **self._asset_health(asset, readings)})
         return output
 
     @staticmethod
@@ -122,13 +136,25 @@ class DigitalTwinService:
             return None
         env = twin["environment"] or {"temp": -15, "wind": 10}
         energy = twin["energy"] or {"battery": 50}
+        energy_config = station_energy_config(station_id)
+        generator_index = 0
+        assets = []
+        for asset in twin["assets"]:
+            if asset["type"] == "generator":
+                generator_index += 1
+                usable = energy_config["usable_capacity_kw"]
+                assets.append({"id": asset["id"], "type": "generator", "online": asset["online"],
+                               "cap": usable, "rated_capacity_kva": energy_config["rated_capacity_kva"],
+                               "usable_capacity_kw": usable, "power_factor_assumption": energy_config["power_factor_assumption"]})
+            else:
+                assets.append({"id": asset["id"], "type": asset["type"], "online": asset["online"], "cap": asset["cap"]})
         return {
             "id": station_id, "env": {"temp": env["temp"], "wind": env["wind"]},
             "baseLoad": 36 if station_id == "maitri" else 42,
             "resupplyIn": 24 if station_id == "maitri" else 20,
             "solar": 6 if station_id == "maitri" else 4, "capFactor": 1,
             "occupancy": 24 if station_id == "maitri" else 31, "occupancyCapacity": 50,
-            "assets": [{"id": a["id"], "type": a["type"], "online": a["online"], "cap": a["cap"]} for a in twin["assets"]],
+            "assets": assets,
             "battery": {"kwh": 400, "pct": energy.get("battery", 50)},
             "inv": [{"k": i.item_key, "stock": i.stock, "cap": i.capacity, "rate": i.daily_rate} for i in twin["inventory"]],
         }

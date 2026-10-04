@@ -1,0 +1,9 @@
+-- Phase 6 energy domain history extensions.
+ALTER TABLE energy_snapshots ADD COLUMN base_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN heating_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN water_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN lab_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN communications_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN lighting_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN other_load_kw FLOAT;
+ALTER TABLE energy_snapshots ADD COLUMN energy_status VARCHAR(30);

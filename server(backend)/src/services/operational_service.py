@@ -32,7 +32,11 @@ def persist_station_snapshot(db: Session, station: dict, observed_at: datetime |
         generation_kw=sim.r1(metrics["output"]), demand_kw=sim.r1(metrics["demand"]),
         capacity_kw=sim.r1(metrics["cap"]), battery_pct=sim.r1(battery["pct"]),
         fuel_consumption_l=sim.r1(metrics["fuelRate"] / 24),
-        generator_load_pct=sim.r1(metrics["genOut"] / metrics["capGen"] * 100) if metrics["capGen"] else 0,
+        generator_load_pct=sim.r1(metrics["generatorLoadPct"]),
+        base_load_kw=sim.r1(metrics["base"]), heating_load_kw=sim.r1(metrics["heat"]),
+        water_load_kw=sim.r1(metrics["water"]), lab_load_kw=sim.r1(metrics["lab"]),
+        communications_load_kw=sim.r1(metrics["comms"]), lighting_load_kw=sim.r1(metrics["lighting"]),
+        other_load_kw=sim.r1(metrics["other"]), energy_status=metrics["energyStatus"],
         source_type="SIMULATED",
     ))
     env = station["env"]
@@ -79,7 +83,8 @@ def energy_history(db: Session, station_id: str, hours: int = 72) -> list[dict]:
         EnergySnapshot.station_id == station_id, EnergySnapshot.timestamp >= since
     ).order_by(EnergySnapshot.timestamp.asc()).all()
     return [{"t": row.timestamp.strftime("%H:%M:%S"), "gen": row.generation_kw,
-             "demand": row.demand_kw, "cap": row.capacity_kw, "battery": row.battery_pct}
+             "demand": row.demand_kw, "cap": row.capacity_kw, "battery": row.battery_pct,
+             "fuel": row.fuel_consumption_l, "status": row.energy_status}
             for row in rows]
 
 

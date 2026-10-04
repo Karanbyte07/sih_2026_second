@@ -27,7 +27,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Any
 
-from src.services.energy_service import calculate_energy, update_battery
+from src.services.energy_service import calculate_energy, station_energy_config, update_battery
 from src.services.environment_service import update_environment
 from src.services.inventory_service import consume
 
@@ -397,6 +397,24 @@ def make_alerts(s: dict) -> list[dict]:  # noqa: C901
             "Rule: demand > available capacity.",
         )
 
+    if m["generatorLoadPct"] > 90:
+        add(
+            "high-generator-load", "warning", "High generator load", "Energy", None, "/energy",
+            f"Online generation is operating at {r1(m['generatorLoadPct'])}% utilization.",
+            "Reduced operating margin and increased fuel consumption.",
+            "Reduce non-critical loads or restore generation capacity.",
+            "Rule: generator utilization > 90%.",
+        )
+
+    if m["cap"] > 0 and m["cap"] - m["demand"] < m["cap"] * 0.1 and m["deficit"] == 0:
+        add(
+            "low-generation-margin", "warning", "Low generation margin", "Energy", None, "/energy",
+            f"Only {r1(m['cap'] - m['demand'])} kW remains above current demand.",
+            "Small demand changes or generator faults may require battery support.",
+            "Review loads and generator availability.",
+            "Rule: spare generation margin < 10%.",
+        )
+
     if s["env"]["temp"] < cfg["tempWarn"]:
         add(
             "cold", "warning", "Extreme cold", "Environment", None, "/environment",
@@ -413,6 +431,15 @@ def make_alerts(s: dict) -> list[dict]:  # noqa: C901
             "Comms degradation and drifting snow.",
             "Limit outdoor work.",
             f"Rule: wind > {cfg['windWarn']} m/s.",
+        )
+
+    if days_of(s, s["inv"][0]) < 14:
+        add(
+            "low-fuel-autonomy", "warning", "Low fuel autonomy", "Logistics", "fuel", "/logistics",
+            f"Fuel autonomy is {r1(days_of(s, s['inv'][0]))} days at current generation.",
+            "The station may face a fuel shortage before resupply.",
+            "Reduce generation demand and review resupply plans.",
+            "Rule: fuel autonomy < 14 days.",
         )
 
     # Purge stale seen/acked entries
@@ -489,6 +516,13 @@ def _make_inv(fuel_stock: float, spare_stock: float) -> list[dict]:
 
 
 def _build_station(sid: str, params: dict) -> dict:
+    assets = _make_assets()
+    energy_config = station_energy_config(sid)
+    for asset in assets:
+        if asset["type"] == "generator":
+            asset["cap"] = energy_config["usable_capacity_kw"]
+            asset["ratedCapacityKVA"] = energy_config["rated_capacity_kva"]
+            asset["powerFactorAssumption"] = energy_config["power_factor_assumption"]
     return {
         "id": sid,
         "name": sid.capitalize(),
@@ -497,7 +531,7 @@ def _build_station(sid: str, params: dict) -> dict:
             "temp": params["t"], "wind": params["w"], "dir": 200,
             "pressure": params["p"], "snow": params["sn"], "vis": 9.0,
         },
-        "assets": _make_assets(),
+        "assets": assets,
         "baseLoad": params["base"],
         "occupancy": params["occupancy"], "occupancyCapacity": 50,
         "solar": params["solar"],

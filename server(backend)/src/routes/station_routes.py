@@ -27,6 +27,7 @@ from src.services.prediction_service import PredictionService
 from src.services.scenario_service import SCENARIO_LIMITS, ScenarioService
 from src.services.simulation_control_service import reset_controls, set_controls
 from src.services.energy_service import calculate_energy
+from src.services.energy_health_service import calculate_energy_health
 from src.services.environment_ingestion_service import PublicDataIngestionService
 from src.services.public_environment_provider import PublicEnvironmentProvider
 from src.config.settings import get_settings
@@ -136,25 +137,39 @@ async def get_energy(station_id: str, user: User = Depends(get_current_user), db
     s = twin_service.calculation_state(station_id)
     m = calculate_energy(s)
     base = s["baseLoad"]
+    fuel = inventory_output(db, s)[0]
+    fuel_days = fuel["stock"] / m["fuelRate"] if m["fuelRate"] else 999
+    history = energy_history(db, station_id)
+    demands = [row["demand"] for row in history if row.get("demand") is not None]
+    health = calculate_energy_health({**m, "batteryPct": (twin["energy"] or {}).get("battery", s["battery"]["pct"])}, fuel_days, twin["assets"])
     return {
-        "history": energy_history(db, station_id),
+        "history": history,
         "now": {
-            "gen": (twin["energy"] or {}).get("gen", sim.r1(m["output"])),
-            "demand": (twin["energy"] or {}).get("demand", sim.r1(m["demand"])),
-            "cap": (twin["energy"] or {}).get("cap", sim.r1(m["cap"])),
+            "gen": sim.r1(m["output"]),
+            "demand": sim.r1(m["demand"]),
+            "cap": sim.r1(m["cap"]),
             "deficit": sim.r1(m["deficit"]),
-            "battery": (twin["energy"] or {}).get("battery", sim.r1(s["battery"]["pct"])),
+            "battery": sim.r1((twin["energy"] or {}).get("battery", s["battery"]["pct"])),
             "kwh": s["battery"]["kwh"],
-            "fuel": inventory_output(db, s)[0],
+            "fuel": fuel,
         },
         "breakdown": [
-            {"name": "Heating",      "value": sim.r1(m["heat"])},
-            {"name": "Living",       "value": sim.r1(base * 0.30)},
-            {"name": "Laboratories", "value": sim.r1(base * 0.35)},
-            {"name": "Water",        "value": sim.r1(base * 0.15)},
-            {"name": "Comms & other","value": sim.r1(base * 0.20)},
+            {"name": "Base load", "value": sim.r1(m["base"])},
+            {"name": "Heating", "value": sim.r1(m["heat"])},
+            {"name": "Water", "value": sim.r1(m["water"])},
+            {"name": "Laboratories", "value": sim.r1(m["lab"])},
+            {"name": "Communications", "value": sim.r1(m["comms"])},
+            {"name": "Lighting", "value": sim.r1(m["lighting"])},
+            {"name": "Other", "value": sim.r1(m["other"])},
         ],
         "chain": sim.chain_info(s),
+        "energyStatus": m["energyStatus"], "energyHealth": health,
+        "peakDemand": max(demands + [m["demand"]]),
+        "averageDemand": sum(demands) / len(demands) if demands else m["demand"],
+        "generatorSummary": m["dispatch"],
+        "batterySummary": {"soc": s["battery"]["pct"], "chargeRateKw": s["battery"].get("charge_rate_kw", 0),
+                            "dischargeRateKw": s["battery"].get("discharge_rate_kw", 0)},
+        "fuelAutonomy": {"days": sim.r1(fuel_days), "rateLPerDay": sim.r1(m["fuelRate"]), "sourceType": "DERIVED"},
     }
 
 
