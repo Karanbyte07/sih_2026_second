@@ -282,11 +282,15 @@ class InventoryTransaction(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False, index=True)
+    station_id = Column(String(50), ForeignKey("stations.id"), nullable=True, index=True)
     timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    previous_quantity = Column(Float, nullable=True)
     quantity_change = Column(Float, nullable=False)
     resulting_quantity = Column(Float, nullable=False)
+    transaction_type = Column(String(50), nullable=False, default="ADJUSTMENT")
     reason = Column(String(255), nullable=True)
     user_name = Column(String(255), nullable=True)
+    source_type = Column(String(50), nullable=False, default="SIMULATED")
 
     item = relationship("InventoryItem")
 

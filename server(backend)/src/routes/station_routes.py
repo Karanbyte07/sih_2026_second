@@ -28,6 +28,7 @@ from src.services.scenario_service import SCENARIO_LIMITS, ScenarioService
 from src.services.simulation_control_service import reset_controls, set_controls
 from src.services.energy_service import calculate_energy
 from src.services.energy_health_service import calculate_energy_health
+from src.services.logistics_service import LogisticsService
 from src.services.environment_ingestion_service import PublicDataIngestionService
 from src.services.public_environment_provider import PublicEnvironmentProvider
 from src.config.settings import get_settings
@@ -178,19 +179,14 @@ async def get_energy(station_id: str, user: User = Depends(get_current_user), db
 # ---------------------------------------------------------------------------
 @router.get("/{station_id}/logistics")
 async def get_logistics(station_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    s = DigitalTwinService(db).calculation_state(station_id)
+    twin_service = DigitalTwinService(db)
+    s = twin_service.calculation_state(station_id)
     if not s:
         raise HTTPException(status_code=404, detail="Unknown station")
+    logistics = LogisticsService(db).state(station_id, s)
     return {
-        "items": inventory_output(db, s),
-        "resupply": {
-            "inDays": s["resupplyIn"],
-            "date": sim.day(s["resupplyIn"]),
-            "schedule": [{"date": row.expected_date, "cargo": row.cargo_description,
-                           "status": row.status.title()} for row in db.query(ResupplySchedule)
-                           .filter(ResupplySchedule.station_id == station_id)
-                           .order_by(ResupplySchedule.expected_date).all()],
-        },
+        "items": logistics["resources"], "logistics": logistics,
+        "resupply": logistics["resupply"],
     }
 
 
@@ -234,7 +230,8 @@ async def update_inventory(
         entity_type="inventory",
         entity_id=f"{station_id}:{k}",
     )
-    record_inventory_change(db, inv_item, v, body.get("reason", "ADJUSTMENT"), user.name)
+    record_inventory_change(db, inv_item, v, body.get("reason", "ADJUSTMENT"), user.name,
+                            body.get("transactionType", "ADJUSTMENT"))
     return {"ok": True, "items": inventory_output(db, DigitalTwinService(db).calculation_state(station_id))}
 
 
@@ -405,8 +402,15 @@ async def complete_maintenance(task_id: int, user: User = Depends(get_current_us
     task.status = "Completed"
     task.completed_at = datetime.utcnow()
     db.commit()
+    part_transaction = None
+    if task.parts and task.parts != "-":
+        part_transaction = LogisticsService(db).consume_resource(
+            task.station_id, "parts", 1, "MAINTENANCE_USE",
+            f"Maintenance task {task.id}: {task.parts}", user.name
+        )
     log_action(db, f"Completed maintenance task {task_id}", user=user, entity_type="maintenance", entity_id=str(task_id))
-    return {"ok": True}
+    return {"ok": True, "partConsumed": bool(part_transaction),
+            "partAvailable": part_transaction is not None}
 
 
 @api_router.get("/environment/provider-status")

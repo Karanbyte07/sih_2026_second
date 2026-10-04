@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from sqlalchemy import inspect, text
-from src.db.database import engine, Base, SessionLocal
+from src.db.database import engine, Base, SessionLocal, ensure_logistics_schema
 from src.config.settings import get_settings
 from src.db.models import Station, Asset, SystemSettings
 from src.routes import auth_routes, station_routes
@@ -29,6 +29,7 @@ import src.utils.simulation as sim
 async def lifespan(app: FastAPI):
     # Ensure tables exist (Phase 1 simplistic migration)
     Base.metadata.create_all(bind=engine)
+    ensure_logistics_schema()
     with engine.begin() as connection:
         columns = {column["name"] for column in inspect(engine).get_columns("energy_snapshots")}
         if "fuel_consumption_l" not in columns:
@@ -124,6 +125,12 @@ async def persist_tick_loop():
     last_persisted = 0.0
     while True:
         for station in sim.S.values():
+            with SessionLocal() as inventory_db:
+                current_inventory = load_inventory(inventory_db)
+            for item in station["inv"]:
+                persisted_stock = current_inventory.get((station["id"], item["k"]))
+                if persisted_stock is not None:
+                    item["stock"] = persisted_stock
             sim.tick(station)
         sim.last_tick = datetime.now()
         now = time.monotonic()

@@ -5,6 +5,7 @@ from src.services.digital_twin_service import DigitalTwinService
 from src.services.energy_service import calculate_energy, update_battery
 from src.services.inventory_service import consumption_rates
 from src.services.simulation_control_service import get_controls
+from src.services.logistics_service import LogisticsService
 
 SCENARIO_LIMITS = {
     "temperatureOffset": (-30.0, 10.0), "windSpeed": (0.0, 40.0),
@@ -85,6 +86,9 @@ class ScenarioService:
                  "deficit": round(after["deficit"] - before["deficit"], 1),
                  "fuelRate": round(after["fuelRate"] - before["fuelRate"], 1),
                  "battery": round(simulated["battery"]["pct"] - baseline["battery"]["pct"], 1)}
+        logistics = LogisticsService(self.db).state(
+            station_id, simulated, simulated.get("delayDays", 0), baseline["twin"]["environmentSeverity"]
+        )
         def view(metrics, state):
             fuel = next((item for item in state["inv"] if item["k"] == "fuel"), None)
             fuel_days = fuel["stock"] / metrics["fuelRate"] if fuel and metrics["fuelRate"] else 999
@@ -95,7 +99,7 @@ class ScenarioService:
                 "fuelRate": round(metrics["fuelRate"], 1), "sourceType": "DERIVED"}
         return {"scenario": scenario, "stationId": station_id, "temporary": True,
             "before": view(before, baseline), "after": view(after, simulated),
-                "delta": delta, "resources": projections,
+                "delta": delta, "resources": projections, "logistics": logistics,
                 "affectedAssets": [a["id"] for a in simulated["assets"] if a["online"] != next(x["online"] for x in baseline["assets"] if x["id"] == a["id"])],
                 "affectedSystems": ["energy", "battery", "fuel", "inventory"],
                 "alerts": [{"severity": "critical" if after["deficit"] > 0 else "warning", "title": f"{scenario.replace('_', ' ').title()} scenario"}],

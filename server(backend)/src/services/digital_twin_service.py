@@ -1,7 +1,7 @@
 """Database-backed current Digital Twin state assembled from latest observations."""
 from datetime import datetime
 from sqlalchemy.orm import Session
-from src.db.database import ensure_energy_schema
+from src.db.database import ensure_energy_schema, ensure_logistics_schema
 
 from src.db.models import (Alert, Asset, AssetReading, EnergySnapshot, EnvironmentReading,
                            EnvironmentProviderStatus, InventoryItem, PublicEnvironmentObservation)
@@ -14,6 +14,7 @@ from src.services.energy_service import station_energy_config
 class DigitalTwinService:
     def __init__(self, db: Session):
         ensure_energy_schema()
+        ensure_logistics_schema()
         self.db = db
 
     def _station(self, station_id: str):
@@ -134,6 +135,9 @@ class DigitalTwinService:
         twin = self.state(station_id)
         if not twin:
             return None
+        return self._calculation_state_from_twin(station_id, twin)
+
+    def _calculation_state_from_twin(self, station_id: str, twin: dict) -> dict:
         env = twin["environment"] or {"temp": -15, "wind": 10}
         energy = twin["energy"] or {"battery": 50}
         energy_config = station_energy_config(station_id)
@@ -158,3 +162,11 @@ class DigitalTwinService:
             "battery": {"kwh": 400, "pct": energy.get("battery", 50)},
             "inv": [{"k": i.item_key, "stock": i.stock, "cap": i.capacity, "rate": i.daily_rate} for i in twin["inventory"]],
         }
+
+    def logistics_state(self, station_id: str, delay_days: int = 0) -> dict:
+        twin = self.state(station_id)
+        if not twin:
+            return None
+        from src.services.logistics_service import LogisticsService
+        state = self._calculation_state_from_twin(station_id, twin)
+        return LogisticsService(self.db).state(station_id, state, delay_days, twin["environmentSeverity"])

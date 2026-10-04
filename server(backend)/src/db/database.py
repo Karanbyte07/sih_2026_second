@@ -42,3 +42,18 @@ def ensure_energy_schema() -> None:
         for column, column_type in required.items():
             if column not in columns:
                 connection.execute(text(f"ALTER TABLE energy_snapshots ADD COLUMN {column} {column_type}"))
+
+
+def ensure_logistics_schema() -> None:
+    """Apply Phase 7 transaction metadata for existing SQLite databases."""
+    Base.metadata.create_all(bind=engine)
+    columns = {column["name"] for column in inspect(engine).get_columns("inventory_transactions")}
+    required = {
+        "station_id": "VARCHAR(50)", "previous_quantity": "FLOAT",
+        "transaction_type": "VARCHAR(50) NOT NULL DEFAULT 'ADJUSTMENT'",
+        "source_type": "VARCHAR(50) NOT NULL DEFAULT 'SIMULATED'",
+    }
+    with engine.begin() as connection:
+        for column, column_type in required.items():
+            if column not in columns:
+                connection.execute(text(f"ALTER TABLE inventory_transactions ADD COLUMN {column} {column_type}"))

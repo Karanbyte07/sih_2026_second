@@ -65,7 +65,16 @@ def persist_station_snapshot(db: Session, station: dict, observed_at: datetime |
     for item_state in station["inv"]:
         item = inventory.get(item_state["k"])
         if item:
+            previous = item.stock
             item.stock = item_state["stock"]
+            change = item.stock - previous
+            if change <= -1:
+                db.add(InventoryTransaction(
+                    item_id=item.id, station_id=item.station_id, previous_quantity=previous,
+                    quantity_change=change, resulting_quantity=item.stock,
+                    transaction_type="CONSUMPTION", reason="Simulation operational consumption",
+                    user_name="simulation", source_type="SIMULATED",
+                ))
     db.commit()
 
 
@@ -149,17 +158,34 @@ def ensure_operational_seed(db: Session) -> None:
     db.commit()
 
 
-def record_inventory_change(db: Session, item: InventoryItem, new_stock: float, reason: str, user_name: str) -> None:
+def record_inventory_change(db: Session, item: InventoryItem, new_stock: float, reason: str,
+                            user_name: str, transaction_type: str = "ADJUSTMENT") -> None:
     previous = item.stock
     item.stock = new_stock
-    db.add(InventoryTransaction(item_id=item.id, quantity_change=new_stock - previous,
-                                resulting_quantity=new_stock, reason=reason, user_name=user_name))
+    db.add(InventoryTransaction(item_id=item.id, station_id=item.station_id,
+                                previous_quantity=previous, quantity_change=new_stock - previous,
+                                resulting_quantity=new_stock, transaction_type=transaction_type,
+                                reason=reason, user_name=user_name, source_type="SIMULATED"))
     db.commit()
 
 
 def sync_alerts(db: Session, station: dict) -> None:
     """Upsert currently triggered rules by stable station alert key."""
     current_alerts = sim.make_alerts(station)
+    from src.services.logistics_service import LogisticsService
+    logistics = LogisticsService(db).state(station["id"], station)
+    for resource in logistics["resources"]:
+        if resource["resourceStatus"] == "NORMAL":
+            continue
+        current_alerts.append({
+            "id": f"{station['id']}:logistics-{resource['k']}",
+            "severity": "critical" if resource["resourceStatus"] == "CRITICAL" else "warning",
+            "title": f"Low {resource['name']}", "source": "Logistics", "assetId": resource["k"],
+            "desc": f"{resource['name']} has {resource['daysRemaining']} projected days remaining.",
+            "impact": "Resource availability may affect station operations.",
+            "action": "Review consumption and resupply coverage.",
+            "why": f"Rule: projected coverage is {resource['coverageStatus']}.",
+        })
     current_keys = {current["id"] for current in current_alerts}
     for stale in db.query(Alert).filter(Alert.station_id == station["id"], Alert.status == "ACTIVE").all():
         if stale.alert_key not in current_keys:
