@@ -29,6 +29,7 @@ from src.services.simulation_control_service import reset_controls, set_controls
 from src.services.energy_service import calculate_energy
 from src.services.energy_health_service import calculate_energy_health
 from src.services.logistics_service import LogisticsService
+from src.services.maintenance_service import MaintenanceService
 from src.services.environment_ingestion_service import PublicDataIngestionService
 from src.services.public_environment_provider import PublicEnvironmentProvider
 from src.config.settings import get_settings
@@ -112,6 +113,7 @@ async def get_overview(station_id: str, user: User = Depends(get_current_user), 
         "assets": assets,
         "chain": sim.chain_info(s),
         "freshness": twin["freshness"],
+        "infrastructure": twin["infrastructure"],
     }
 
 
@@ -291,9 +293,9 @@ async def get_maintenance(station_id: str, user: User = Depends(get_current_user
     twin = DigitalTwinService(db).state(station_id)
     if not twin:
         raise HTTPException(status_code=404, detail="Unknown station")
+    maintenance_service = MaintenanceService(db)
     return {
-        "tasks": [{"id": t.id, "assetId": t.asset_id, "title": t.title, "status": "Done" if t.status == "Completed" else t.status,
-               "due": t.due_date, "parts": t.parts, "by": t.created_by} for t in
+        "tasks": [maintenance_service.task_output(t) for t in
               db.query(MaintenanceTask).filter(MaintenanceTask.station_id == station_id).order_by(MaintenanceTask.id).all()],
         "assets": [
             {
@@ -387,30 +389,26 @@ async def create_maintenance(body: dict, user: User = Depends(get_current_user),
         raise HTTPException(status_code=400, detail="stationId and title are required")
     if not db.query(Asset).filter(Asset.station_id == station_id, Asset.asset_key == body.get("assetId")).first():
         raise HTTPException(status_code=400, detail="Unknown asset for station")
-    task = MaintenanceTask(station_id=station_id, asset_id=body.get("assetId"), title=title,
-                            due_date=body.get("due"), parts=body.get("parts"), created_by=user.name)
-    db.add(task)
-    db.commit()
+    try:
+        task = MaintenanceService(db).create_task(
+            station_id, body.get("assetId"), title, body.get("due"), body.get("parts"),
+            body.get("requiredParts"), user.name
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "id": task.id}
 
 
 @api_router.post("/maintenance/{task_id}/complete")
 async def complete_maintenance(task_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    task = db.query(MaintenanceTask).filter(MaintenanceTask.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Maintenance task not found")
-    task.status = "Completed"
-    task.completed_at = datetime.utcnow()
-    db.commit()
-    part_transaction = None
-    if task.parts and task.parts != "-":
-        part_transaction = LogisticsService(db).consume_resource(
-            task.station_id, "parts", 1, "MAINTENANCE_USE",
-            f"Maintenance task {task.id}: {task.parts}", user.name
-        )
+    try:
+        result = MaintenanceService(db).complete_task(task_id, user.name)
+    except ValueError as exc:
+        db.rollback()
+        status_code = 404 if str(exc) == "Maintenance task not found" else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     log_action(db, f"Completed maintenance task {task_id}", user=user, entity_type="maintenance", entity_id=str(task_id))
-    return {"ok": True, "partConsumed": bool(part_transaction),
-            "partAvailable": part_transaction is not None}
+    return {"ok": True, "task": result}
 
 
 @api_router.get("/environment/provider-status")

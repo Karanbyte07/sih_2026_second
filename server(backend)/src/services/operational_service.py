@@ -173,6 +173,7 @@ def sync_alerts(db: Session, station: dict) -> None:
     """Upsert currently triggered rules by stable station alert key."""
     current_alerts = sim.make_alerts(station)
     from src.services.logistics_service import LogisticsService
+    from src.services.maintenance_service import MaintenanceService
     logistics = LogisticsService(db).state(station["id"], station)
     for resource in logistics["resources"]:
         if resource["resourceStatus"] == "NORMAL":
@@ -186,6 +187,18 @@ def sync_alerts(db: Session, station: dict) -> None:
             "action": "Review consumption and resupply coverage.",
             "why": f"Rule: projected coverage is {resource['coverageStatus']}.",
         })
+    maintenance_service = MaintenanceService(db)
+    for task in db.query(MaintenanceTask).filter(MaintenanceTask.station_id == station["id"], MaintenanceTask.status != "Completed").all():
+        if maintenance_service.readiness(task) == "NOT_READY":
+            current_alerts.append({
+                "id": f"{station['id']}:maintenance-{task.id}-parts",
+                "severity": "critical" if task.priority == "CRITICAL" else "warning",
+                "title": "Maintenance parts unavailable", "source": "Maintenance", "assetId": task.asset_id,
+                "desc": f"Required parts for {task.title} are unavailable.",
+                "impact": "Maintenance readiness is blocked for this task.",
+                "action": "Include the required part in the next resupply.",
+                "why": "Rule: maintenance readiness = NOT_READY.",
+            })
     current_keys = {current["id"] for current in current_alerts}
     for stale in db.query(Alert).filter(Alert.station_id == station["id"], Alert.status == "ACTIVE").all():
         if stale.alert_key not in current_keys:

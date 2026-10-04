@@ -1,20 +1,23 @@
 """Database-backed current Digital Twin state assembled from latest observations."""
 from datetime import datetime
 from sqlalchemy.orm import Session
-from src.db.database import ensure_energy_schema, ensure_logistics_schema
+from src.db.database import ensure_energy_schema, ensure_infrastructure_schema, ensure_logistics_schema
 
 from src.db.models import (Alert, Asset, AssetReading, EnergySnapshot, EnvironmentReading,
-                           EnvironmentProviderStatus, InventoryItem, PublicEnvironmentObservation)
+                           EnvironmentProviderStatus, InventoryItem, MaintenanceTask,
+                           PublicEnvironmentObservation)
 from src.services.environment_service import severity
 from src.services.operational_service import alert_output
 from src.services.simulation_control_service import get_controls
 from src.services.energy_service import station_energy_config
+from src.services.asset_health_service import calculate_asset_health
 
 
 class DigitalTwinService:
     def __init__(self, db: Session):
         ensure_energy_schema()
         ensure_logistics_schema()
+        ensure_infrastructure_schema()
         self.db = db
 
     def _station(self, station_id: str):
@@ -83,35 +86,26 @@ class DigitalTwinService:
                     "usableCapacitySourceType": energy_config["usable_source_type"],
                     "powerFactorAssumption": energy_config["power_factor_assumption"],
                 }
+            health = calculate_asset_health(asset, readings)
+            from src.services.maintenance_service import MaintenanceService
+            maintenance_tasks = self.db.query(MaintenanceTask).filter(
+                MaintenanceTask.station_id == station_id,
+                MaintenanceTask.asset_id == asset.asset_key,
+                MaintenanceTask.status != "Completed",
+            ).all()
+            maintenance = MaintenanceService(self.db).task_output(maintenance_tasks[0]) if maintenance_tasks else {
+                "maintenanceState": "NOT_DUE", "priority": "LOW", "readiness": "READY", "requiredParts": []
+            }
             output.append({"id": asset.asset_key, "name": asset.name, "type": asset.type,
                            "x": asset.x, "y": asset.y, "w": asset.w, "h": asset.h, "links": asset.links,
                            "cap": asset.capacity_kw, "online": asset.online, "hours": asset.operational_hours,
                            "last": asset.last_service_date, "next": asset.next_service_date,
                            "readings": [{"k": r.metric, "v": r.value, "u": r.unit} for r in latest_readings],
-                           "hist": trend, **generator_metadata, **self._asset_health(asset, readings)})
+                           "hist": trend, **generator_metadata, **health,
+                           "maintenanceState": maintenance["maintenanceState"],
+                           "maintenancePriority": maintenance["priority"],
+                           "maintenanceReadiness": maintenance["readiness"]})
         return output
-
-    @staticmethod
-    def _asset_health(asset, readings) -> dict:
-        if not asset.online:
-            return {"status": "offline", "healthScore": 0, "healthDrivers": ["asset is offline"]}
-        values = {r.metric.lower(): r.value for r in readings}
-        vibration = values.get("vibration", 0)
-        temperature = values.get("temperature", 0)
-        drivers = []
-        if vibration >= 6 or temperature > 105:
-            if vibration >= 6:
-                drivers.append("vibration above critical threshold")
-            if temperature > 105:
-                drivers.append("temperature above critical threshold")
-            return {"status": "critical", "healthScore": 35, "healthDrivers": drivers}
-        if vibration >= 4.5 or temperature > 95:
-            if vibration >= 4.5:
-                drivers.append("vibration above baseline")
-            if temperature > 95:
-                drivers.append("elevated operating temperature")
-            return {"status": "warning", "healthScore": 68, "healthDrivers": drivers}
-        return {"status": "normal", "healthScore": 100, "healthDrivers": ["readings within configured range"]}
 
     def state(self, station_id: str) -> dict:
         station = self._station(station_id)
@@ -121,11 +115,34 @@ class DigitalTwinService:
         energy = self.latest_energy(station_id)
         inventory = self.db.query(InventoryItem).filter(InventoryItem.station_id == station_id).all()
         alerts = self.db.query(Alert).filter(Alert.station_id == station_id, Alert.status == "ACTIVE").all()
+        task_rows = self.db.query(MaintenanceTask).filter(MaintenanceTask.station_id == station_id).all()
+        assets = self.assets(station_id)
+        critical_assets = [asset for asset in assets if asset["criticality"] == "CRITICAL"]
+        drivers = []
+        score = 100
+        if any(asset["status"] == "offline" for asset in critical_assets):
+            score -= 40
+            drivers.append("critical infrastructure asset is offline")
+        if any(asset["status"] == "critical" for asset in critical_assets):
+            score -= 30
+            drivers.append("critical infrastructure asset health is critical")
+        if any(task.maintenance_state == "OVERDUE" or task.readiness == "NOT_READY" for task in task_rows):
+            score -= 20
+            drivers.append("maintenance work is overdue or not ready")
+        infrastructure_status = "CRITICAL" if score < 50 else "ATTENTION" if score < 80 else "NORMAL"
+        infrastructure = {"healthScore": max(0, score), "status": infrastructure_status,
+                          "drivers": drivers or ["critical infrastructure is available and maintained"],
+                          "criticalAssets": critical_assets,
+                          "maintenanceSummary": {"total": len(task_rows),
+                            "open": sum(task.status != "Completed" for task in task_rows),
+                            "overdue": sum(task.maintenance_state == "OVERDUE" for task in task_rows),
+                            "notReady": sum(task.readiness == "NOT_READY" for task in task_rows)},
+                          "sourceType": "DERIVED"}
         latest = environment or energy
         age = (datetime.utcnow() - datetime.fromisoformat(latest["timestamp"])).total_seconds() if latest else 999999
         freshness = "CONNECTED" if age < 15 else "DEGRADED" if age < 60 else "STALE"
         return {"id": station.id, "name": station.name, "environment": environment,
-                "energy": energy, "assets": self.assets(station_id),
+            "energy": energy, "assets": assets, "infrastructure": infrastructure,
                 "inventory": inventory, "alerts": [alert_output(a) for a in alerts],
                 "freshness": {"status": freshness, "age": int(age)},
                 "environmentSeverity": severity(environment) if environment else "unknown"}

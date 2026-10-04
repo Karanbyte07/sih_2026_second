@@ -57,3 +57,21 @@ def ensure_logistics_schema() -> None:
         for column, column_type in required.items():
             if column not in columns:
                 connection.execute(text(f"ALTER TABLE inventory_transactions ADD COLUMN {column} {column_type}"))
+
+
+def ensure_infrastructure_schema() -> None:
+    """Apply Phase 8 asset and maintenance metadata for existing SQLite databases."""
+    Base.metadata.create_all(bind=engine)
+    asset_columns = {column["name"] for column in inspect(engine).get_columns("assets")}
+    task_columns = {column["name"] for column in inspect(engine).get_columns("maintenance_tasks")}
+    asset_required = {"criticality": "VARCHAR(20) NOT NULL DEFAULT 'MEDIUM'", "facility": "VARCHAR(100)"}
+    task_required = {"required_parts": "JSON", "priority": "VARCHAR(20) NOT NULL DEFAULT 'MEDIUM'",
+                     "maintenance_state": "VARCHAR(30) NOT NULL DEFAULT 'NOT_DUE'",
+                     "readiness": "VARCHAR(30) NOT NULL DEFAULT 'READY'"}
+    with engine.begin() as connection:
+        for column, column_type in asset_required.items():
+            if column not in asset_columns:
+                connection.execute(text(f"ALTER TABLE assets ADD COLUMN {column} {column_type}"))
+        for column, column_type in task_required.items():
+            if column not in task_columns:
+                connection.execute(text(f"ALTER TABLE maintenance_tasks ADD COLUMN {column} {column_type}"))

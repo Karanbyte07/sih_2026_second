@@ -104,6 +104,8 @@ class Asset(Base):
     last_service_date = Column(String(20), nullable=True)   # ISO date string
     next_service_date = Column(String(20), nullable=True)
     online = Column(Boolean, default=True, nullable=False)
+    criticality = Column(String(20), nullable=False, default="MEDIUM")
+    facility = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -355,6 +357,10 @@ class MaintenanceTask(Base):
     status = Column(String(50), nullable=False, default="Open") # Open, Completed
     due_date = Column(String(20), nullable=True) # YYYY-MM-DD
     parts = Column(String(255), nullable=True)
+    required_parts = Column(JSON, nullable=True)
+    priority = Column(String(20), nullable=False, default="MEDIUM")
+    maintenance_state = Column(String(30), nullable=False, default="NOT_DUE")
+    readiness = Column(String(30), nullable=False, default="READY")
     created_by = Column(String(255), nullable=False, default="system")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
