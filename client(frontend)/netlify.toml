@@ -1,0 +1,18 @@
+[build]
+  publish = "dist"
+  command = "npm run build"
+
+# 1. Proxy API requests to your live backend
+# This replaces the Vite proxy you use locally
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR_LIVE_BACKEND_URL.com/api/:splat" # ⚠️ REPLACE THIS with your actual deployed backend URL!
+  status = 200
+  force = true
+
+# 2. Support for React Router
+# This prevents 404 errors when users refresh the page on Netlify
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
