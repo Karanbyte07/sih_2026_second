@@ -1,7 +1,10 @@
 [build]
   base = "client(frontend)"
-  command = "npm run build"
-  publish = "client(frontend)/dist"
+  command = "npm install && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
 
 [[redirects]]
   from = "/*"
